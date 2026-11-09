@@ -1,0 +1,50 @@
+use crate::error::AppError;
+use serde::{Deserialize, Serialize};
+
+// JavaScript can represent integer yen exactly throughout this range.
+pub const MAX_PRICE_YEN: i64 = 9_007_199_254_740_991;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Product {
+    pub id: String,
+    pub sku: String,
+    pub name: String,
+    pub brand: Option<String>,
+    pub price_yen: Option<i64>,
+    pub description_note: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProductInput {
+    pub sku: String,
+    pub name: String,
+    pub brand: Option<String>,
+    pub price_yen: Option<i64>,
+    pub description_note: Option<String>,
+}
+
+impl ProductInput {
+    pub fn validate(mut self) -> Result<Self, AppError> {
+        self.sku = self.sku.trim().to_owned();
+        self.name = self.name.trim().to_owned();
+        if self.sku.is_empty() || self.name.is_empty() {
+            return Err(AppError::RequiredField);
+        }
+        if self
+            .price_yen
+            .is_some_and(|price| !(0..=MAX_PRICE_YEN).contains(&price))
+        {
+            return Err(AppError::InvalidPrice);
+        }
+        self.brand = self.brand.and_then(nonempty);
+        self.description_note = self.description_note.and_then(nonempty);
+        Ok(self)
+    }
+}
+
+fn nonempty(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}

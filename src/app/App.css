@@ -1,0 +1,71 @@
+:root {
+  font-family: "Segoe UI", "Yu Gothic UI", Meiryo, sans-serif;
+  color: #203047;
+  background: #f4f6f9;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+
+.app {
+  width: min(100% - 48px, 1120px);
+  margin: 0 auto;
+  padding: 32px 0;
+}
+
+.brand-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  color: white;
+  background: #285bc6;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 20px 0 8px;
+  font-size: clamp(2rem, 6vw, 2.75rem);
+  letter-spacing: -0.04em;
+}
+
+.tagline { margin: 0; color: #526278; line-height: 1.8; }
+
+.connection {
+  margin-top: 36px;
+  padding: 24px;
+  border: 1px solid #dce3ed;
+  border-radius: 16px;
+  background: white;
+}
+
+h2 { margin: 0 0 20px; font-size: 1.125rem; }
+
+button {
+  padding: 12px 20px;
+  border: 0;
+  border-radius: 8px;
+  background: #285bc6;
+  color: white;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { background: #1f489d; }
+button:focus-visible { outline: 3px solid #5478c7; outline-offset: 4px; }
+button:disabled { opacity: 0.65; cursor: wait; }
+
+.status {
+  min-height: 3em;
+  margin: 20px 0 0;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.status[data-state="success"] { color: #176241; }
+.status[data-state="error"] { color: #a62b2b; }
