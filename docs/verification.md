@@ -1,5 +1,232 @@
 # 開発環境の検証結果
 
+## Phase 2 最終レビュー修正（2026-11-09 日本時間）
+
+初回実装の記録は次節に保持した。今回もmain / HEAD `a17ed5f` のまま、Commit・Push・ブランチ切り替えは行っていない。
+開始時に `git status --short` と `git diff --check` を確認し、既存の未コミット変更を維持した。
+
+### 修正内容と範囲
+
+今回変更したファイルは以下の6件のみ。
+
+- `src-tauri/src/services/image_service.rs`：参照取得の事前確認と、OSロック取得後の再照会・隔離判定を分離。
+- `src-tauri/src/infrastructure/media_storage.rs`：正式配置をWindowsの非置換移動へ変更。
+- `src-tauri/src/image_tests.rs`：競合・再照会失敗・非置換配置・長いパスの回帰テストを4件追加。
+- `docs/architecture.md`：正しい初期化順序と正式配置方式を反映。
+- `docs/decisions/0004-product-image-management.md`：既存内容を保持して最終レビューの判断理由を追記。
+- `docs/verification.md`：この最終レビュー記録を追加。
+
+React UI、Commands、Repository、DB共有方式、依存関係、CSP、Capabilities、Asset Protocolの設定は変更していない。
+0001/0002 SQLと `.gitignore` は開始時からバイト単位で保持した。
+
+原因は、OSロックを取得する前のDB参照一覧で隔離を判断していたことである。
+事前照会はDBの利用可否確認だけに使って破棄し、OSロック取得後に最新参照を再照会する。
+二度目の照会に失敗した場合は隔離せずエラーを返す。空の参照集合へ置き換えない。
+DB初期化・事前照会失敗時はメディアを作成しない。ロック取得後の失敗ではロックファイルや必要ディレクトリが作成され得るが、既存ファイルは動かさない。
+ImportPermitとOSロックの保持期間、画像コピー・デコード・ハッシュ中にDB Mutexを保持しない方式は維持した。
+
+正式配置では、事前存在確認と `fs::rename` の間に対象が作成される競合をなくした。
+Windowsの `MoveFileExW` にflags=0を指定し、既存対象の置換と別ボリュームへのコピーをOS操作で拒否する。
+存在確認のI/Oエラーを「未存在」と扱う分岐も削除した。失敗したstagingは既存のDrop処理で整理する。
+長いパスはcanonicalizeのverbatim形式で保持し、Windows専用依存は追加していない。
+
+指摘されたスライス作成だけの `clone()` は開始時点で `std::slice::from_ref()` に置き換え済みだったため、その変更を保持した。
+今回追加のテストにも不要なcloneや警告抑制のallowを導入していない。
+任意のSQLite UNIQUE分類・タスク結合エラー分類は、動作実績と最小変更を優先して変更しなかった。
+
+### 回帰テスト
+
+| 追加テスト | 検証内容 |
+| --- | --- |
+| `initialization_refreshes_references_after_previous_owner_releases_lock` | Bの事前参照取得→Aの画像登録→AのOSロック解放→Bのロック取得・再照会を、2接続と明示的な処理順序で再現。登録画像とDBを保持し、quarantineが空であることを確認 |
+| `failed_locked_reference_refresh_preserves_staging_and_originals` | 事前照会成功後にテストDBの参照テーブルを利用不能にし、再照会失敗時のstaging・正式ファイル保持、隔離なし、OSロック解放を確認 |
+| `placement_never_replaces_an_existing_file_or_directory_and_cleans_staging` | 既存正式ファイルと同名ディレクトリに配置を試み、OS操作が拒否すること、既存画像・元画像・DBを保持し、stagingを整理することを確認 |
+| `windows_placement_supports_long_paths_and_unicode_filenames` | 260文字超の管理パスとUnicode・サロゲートペアを含む元ファイル名で正常取り込みとバイト一致を確認 |
+
+実際の複数プロセスのスケジューリングを使う競合テストではなく、同一の初期化後半処理に対し、
+プロセスA/B相当のSQLite 2接続とOSファイルロックの取得・解放順を明示した決定的な回帰テストである。sleepやタイミング依存の待機は使っていない。
+全テストは専用一時ディレクトリとテストSQLiteを使用し、本番LocalDataは使用していない。
+
+### 最終コマンド検証
+
+| コマンド | 結果 |
+| --- | --- |
+| `npm run build` | 成功。React・Vite設定の型検査と本番ビルド |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 成功 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 成功 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 成功。警告0件、allow追加なし |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 成功。既存35件＋追加4件、39 passed / 0 failed / 0 ignored |
+| `git diff --check` | 成功。既存のCRLF変換予告のみで、空白エラーなし |
+| `npm run tauri build`（通常設定、最後のRustソース変更後） | 成功。EXE・MSI・NSISを最新ソースから再生成 |
+
+サンドボックス内のViteは前回同様 `spawn EPERM` で停止した。通常権限で同じbuildを再実行し、成功した。
+PowerShellプロファイル・ユーザーPATHは変更していない。
+
+通常設定の配布ビルドは終了コード0で完了した（release最適化は約2分28秒）。
+2026-11-09 12:36 日本時間に再生成された以下の3点が、最後に変更したRustソースより新しいことを確認した。
+
+| 配布物 | SHA-256 |
+| --- | --- |
+| `src-tauri/target/release/listing-pilot.exe` | `D0742B0E724A9F576FF96D1F9600547C7F3F559FC06D17A160DA12BE06744ED9` |
+| `src-tauri/target/release/bundle/msi/Listing Pilot_0.1.0_x64_en-US.msi` | `89669D0575D02CFA96DF97DADABF50143077E2AC416BE9DD55B19A3DE43CCC99` |
+| `src-tauri/target/release/bundle/nsis/Listing Pilot_0.1.0_x64-setup.exe` | `A96ECD19B90AC7833A10A3398CF9200CFE3A893C20AA1954E47210784E5CF568` |
+
+通常EXE内に標準identifier `com.listingpilot.app` が含まれ、初回・今回のテスト用絶対保存先が含まれないことも確認した。
+今回の配布物を過去の検証用バイナリで置き換える操作は行っていない。
+CLIの既存identifier末尾 `.app` に関するmacOS向け推奨警告は継続しているが、Windowsビルドは成功している。
+
+### 関連するWindows実WebView2検証
+
+今回専用の `.verification/final-review/tauri.config.json` に `appDirectoriesOverride` を指定し、新しいUUID付き一時フォルダーへDB・画像・WebViewデータを隔離した。
+通常設定ファイルにはテスト用保存先を追加していない。
+
+- 新規商品をフォームから登録し、詳細の空状態からRustネイティブダイアログでPNG・JPEG・不正ファイルを選択。
+- 新しい配置方式で成功2枚・失敗1枚となり、実imgのnaturalWidth=8を2枚とも確認。
+- 同じ画像の再選択は重複1枚、取り込み中の二重Commandは `media_busy`、キャンセルは正常結果。
+- 正常終了後に再起動し、商品情報と画像メタデータが一致、画像2枚とも再表示。
+- 正式画像と選択元のSHA-256が一致し、quarantineが空であることを確認。
+- 通常表示・操作のCSP違反0件、JavaScript例外0件。
+
+再起動試行で旧Viteの終了直前に新Viteが起動し、一度ポート1420の競合が発生した。
+旧検証プロセスの終了と1420/9334の解放を確認して再実行し、Vite・Tauri起動と再表示検証が成功した。アプリコードの変更は不要だった。
+証跡は `.verification/final-review/` の `images-result.json`、`images-desktop.png`、`images-restarted.png` と検証スクリプト。
+
+CSP・Asset Protocolの設定は変えていないため、今回release版の画面・範囲外403の再検証は行っていない。
+初回実装時の開発/release版検証と範囲外HTTP 403の記録は次節に保持した。
+インストーラー経由の導入・別PC・実ディスク容量不足・電源断・実運用バックアップ復旧は引き続き手動確認対象である。
+
+検証アプリ・Vite・CDPは終了し、1420/9334に検証サーバーが残っていないことを確認した。
+最終 `git status --short` は開始時と同じパス集合で、今回の内容変更は上記6ファイルに限定した。意図しない変更・新規Git対象ファイルはない。
+0001/0002 SQLおよび `.gitignore` のSHA-256は次節の初回記録と一致し、ユーザーの変更を保持している。
+
+## Phase 2 初回実装：商品画像（2026-11-09 日本時間）
+
+開始時HEADは `a17ed5f`（main）。開始時の未コミット変更は `.gitignore`、ユーザー作成の0002 SQL、ADR 0004。
+`.gitignore` と0001/0002 SQLはバイト単位で保持し、ADR 0004は元の内容に実装確定事項を追記した。
+Commit・Push・ブランチ切り替えは実施していない。
+
+確認対象は、商品一覧 → 詳細 → Rustネイティブダイアログ → 検証・コピー → SQLite登録 → Asset Protocol画像表示 → 終了・再起動後の再表示。
+React Best PracticesとVerificationスキルを適用し、UIから直接invokeせずAPI層を通す境界も確認した。
+
+### 自動検証
+
+| コマンド | 結果 |
+| --- | --- |
+| `npm run build` | 成功。React・Vite設定の型検査とVite本番ビルド |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 成功 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 成功。stable/MSVC |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 成功。既存15件＋追加20件、計35 passed / 0 failed |
+| `npm run tauri dev -- --config <一時検証設定>` | 成功。実WebView2で以下の経路を確認。通常終了後の再起動も成功 |
+| `npm run tauri build` | 成功。Windows x64のMSI・NSISインストーラーを生成（詳細は下記） |
+| `npm run tauri build -- --config <一時検証設定> --no-bundle` | 成功。保存先だけを隔離したrelease版で本番CSPの実動作を確認 |
+| `git diff --check` | 成功 |
+
+Viteはサンドボックス内で子プロセス起動が `spawn EPERM` となったため、通常権限で再実行して成功した。
+PowerShellプロファイル・ユーザーPATH・npm依存は変更していない。
+
+追加Rustテスト（`src-tauri/src/image_tests.rs`）は以下を確認する。
+
+1. Version 0/1/2のマイグレーションと既存商品の保持
+2. 0002の途中失敗時にテーブル作成をロールバックし、バージョン1を保持
+3. JPEG・PNG・WebPの内容判定、メタデータ、表示順、元ファイルと保存ファイルのバイト列・SHA-256一致
+4. ファイル名に依存しない同一商品内の重複と別商品への登録許可
+5. 画像のハッシュ・相対パス一意制約をDuplicateSkuと区別
+6. 商品不在のService拒否と外部キーによる直接登録拒否
+7. 非対応・偽装・破損・読み取り不能・ディレクトリと部分成功
+8. 20MiB超過、21枚拒否、20枚受け付け
+9. 4,000万画素境界と巨大PNGヘッダーのデコード前拒否
+10. staging・正式配置の失敗時の元ファイル保持と一時ファイル整理
+11. DB INSERT失敗後の補償と登録済み画像の保持
+12. SQLite AFTER INSERT / RAISE(FAIL)でエラーと書き込みが共存する場合の参照確認・画像保持
+13. 異常終了を模したstaging残存・正式配置後未登録の孤立画像の隔離と再実行の安全性
+14. 二重openのOSロック、取り込み中の二重操作・隔離拒否
+15. 欠落画像と改変相対パス・トラバーサルの拒否
+16. SQLiteとファイルの再open後の永続性
+17. キャンセルの正常な空結果
+18. Windows directory junction拒否とリンク先の保持
+19. DB初期化失敗時に画像ディレクトリを作成・整理しない
+20. 画像参照クエリ失敗を空の参照集合と誤認しない
+
+単体テストはOS一時ディレクトリと専用SQLiteのみを使い、終了時に破棄した。
+
+### Windows実アプリ検証
+
+公式の `app.appDirectoriesOverride` を一時設定 `.verification/phase2.config.json` に指定した。
+DB・画像・WebViewデータはUUID付きの一時フォルダーに隔離し、本番の `%LOCALAPPDATA%/com.listingpilot.app` は使用しなかった。
+検証用設定はGit対象外であり、通常の `tauri.conf.json` には保存先の変更を含めていない。
+CDPは検証用WebView2のローカルポート9334を使用し、ネイティブダイアログはUI AutomationとWin32メッセージで操作した。
+Tauri IPC、ネイティブダイアログ、SQLite、Asset Protocolはモックではない。
+
+| 境界 | 結果・証跡 |
+| --- | --- |
+| 一覧 → 商品登録 → 詳細 | 検証商品をフォームから登録し、商品名クリックで詳細へ移動。ブランド・価格などの既存情報と空状態を確認 |
+| 詳細 → Rustダイアログ | 取り込みボタンから実ダイアログを表示。処理中表示と画面移動の無効化を確認 |
+| 複数選択 → 個別処理 | PNG・JPEG・不正PNGを選択し、成功2枚・失敗1枚を通知。成功画像を保持 |
+| SQLite → API → img | 画像メタデータとAPI層のURL変換を確認。実imgのnaturalWidth=8を2枚とも確認 |
+| 同一画像の再選択 | 成功0枚・重複スキップ1枚・失敗0枚。画像数は2枚を維持 |
+| 二重Command | ダイアログ表示中の追加importを `media_busy` で拒否 |
+| 選択キャンセル | 正常結果の日本語通知と既存画像2枚の保持 |
+| 画像公開範囲 | 実在するstaging画像・quarantine画像・SQLite・ダイアログで選択した元PNGをAsset URLで指定し、全てHTTP 403で読み込み拒否。通常の登録画像だけ表示 |
+| CSP・実行時例外 | 通常画像表示と操作中のCSP違反0件、JavaScript例外0件。意図した範囲外拒否のネットワークエラーは別扱い |
+| 終了 → 再起動 | 正常終了・再起動後、商品情報と画像メタデータが完全一致し、2枚とも再表示 |
+| 起動時整合性 | 範囲外拒否試験で残したstaging1ファイルを隔離。登録済み画像を保持 |
+| release版・本番CSP | 保存先だけを同じ一時領域に変更したrelease EXEを起動。`http://tauri.localhost/` の実画面で画像2枚・商品詳細・Rustダイアログ・重複通知を確認。CSP違反・JS例外0件 |
+| release版・欠落と復元 | 検証専用の登録画像を一時退避して再読込し、プレースホルダーと案内を確認。元のパスへ戻して2枚の再表示を確認 |
+| release版・公開範囲 | ダイアログで選択した元PNGも含め、同じ範囲外4種類全てのHTTP 403をCDPのNetwork応答で確認 |
+
+Git対象外のローカル証跡：`.verification/images-smoke.mjs`、`pick-images.ps1`、`images-product.json`、
+`images-result.json`、`images-scope.json`、`images-desktop.png`、`images-restarted.png`、`images-production.png`、`images-missing.png`。
+開発・releaseの検証アプリとViteは終了し、CDP接続も終了した。一時データと証跡はレビューのため残している。
+
+### 既存SQLの保持
+
+作業前後のSHA-256が一致した。
+
+| ファイル | SHA-256 |
+| --- | --- |
+| 0001_create_products.sql | `49DCDDA90C3ECB1A9487AB05DD4500C2CB866FC8ECA818A13C4A77F39E8AA0FB` |
+| 0002_create_product_images.sql | `FF7487E4898B5E651BF90D101413447FCC9ACB88E05B1FABB48CA4EAC3BF26B5` |
+
+0002には必要な商品UUIDの外部キー、相対パスの一意制約、商品ごとのSHA-256一意制約、MIME・サイズ・寸法・表示順の制約があり、修正は不要だった。
+
+### 作成・変更ファイル
+
+- 新規Rust：`commands/image.rs`、`domain/image.rs`、`services/image_service.rs`、`infrastructure/db/image_repository.rs`、`infrastructure/media_storage.rs`、`image_tests.rs`。
+- 変更Rust：`lib.rs`、`error.rs`、既存各mod、`commands/product.rs`、`infrastructure/db/migrations.rs`、`tests.rs`。
+- 設定：`src-tauri/Cargo.toml`、`Cargo.lock`、`tauri.conf.json`。Capabilitiesとnpm依存は変更なし。
+- 新規React/API：`ProductDetail.tsx`、`ProductImages.tsx`、`imageTypes.ts`、`src/lib/api/images.ts`、`request.ts`。
+- 変更React/API：`ProductList.tsx`、`products.css`、`src/lib/api/products.ts`。ProductFormとアプリのブランド・アイコンは変更なし。
+- 文書：`README.md`、`docs/architecture.md`、`data-model.md`、`verification.md`、既存ADR 0004。
+- ユーザーの `.gitignore` と0002 SQLは開始時の変更状態を保持した。
+
+### 未実施・Windows実機での残確認
+
+- 生成したインストーラー経由の導入・アンインストール、別PCでのWebView2互換性。release EXE自体の本番CSP・画像表示・範囲外拒否は隔離設定で確認済み。
+- 実写真を使ったJPEG・PNG・WebPの長時間利用、極端なビット深度・アニメーション画像の表示互換性。
+- 実際のディスク容量不足、権限変更、ネットワークドライブ、OS強制終了・電源断。失敗・残存ファイルは単体テストで模擬した。
+- 実運用で欠落が発生した場合のバックアップ復旧。プレースホルダーとファイル復元後の再表示はrelease版の実画面で確認済み。
+- 実運用バックアップを別ディレクトリへ復元し、DBとmediaを揃えた復旧を確認すること。
+- メディアOSロックは二重openの単体テストで確認。実アプリ二重起動後の案内と再起動は手動確認対象。
+
+画像の削除・変換・リサイズ・並べ替え・ジョブ処理は今回の対象外。既知のテスト失敗はない。
+
+### 配布ビルド記録
+
+`npm run tauri build` が終了コード0で成功し、以下を生成した。インストーラーの実行・公開は行っていない。
+
+- `src-tauri/target/release/listing-pilot.exe`
+- `src-tauri/target/release/bundle/msi/Listing Pilot_0.1.0_x64_en-US.msi`（約3.40MiB）
+- `src-tauri/target/release/bundle/nsis/Listing Pilot_0.1.0_x64-setup.exe`（約2.44MiB）
+
+CLIは既存identifier `com.listingpilot.app` の末尾 `.app` に対してmacOS向けの推奨警告を出した。
+Windowsビルドは成功しており、ユーザー指定の既存identifierとブランドは維持した。
+
+本番CSPの実行時確認には、保存先だけを公式一時設定で変更した追加の `--no-bundle` releaseビルドを使用した。
+通常配布用EXEを退避し、検証用EXEを `.verification/listing-pilot-isolated-release.exe` にコピーした後、通常EXEをバイト単位で復元した。
+復元した `src-tauri/target/release/listing-pilot.exe` のSHA-256は
+`DEC5E6BC4BB406F5C575170621E7E8981BA968997211D239A53FBCFA527FB5D0`。
+MSI・NSISは通常設定で生成したまま保持した。検証用の保存先設定は通常配布物には含めていない。
+
 ## Phase 1：SQLite・商品管理（2026-11-09 日本時間）
 
 確認対象は、商品フォーム → `src/lib/api/products.ts` → Tauri Command → Service → Repository → SQLite → 一覧反映 → 完全終了・再起動後の復元です。

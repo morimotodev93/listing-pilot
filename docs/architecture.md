@@ -1,13 +1,13 @@
 # アーキテクチャ
 
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
-モジュールで整理し、接続確認とSQLiteによる商品管理を実装しています。
+モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
 ## React
 
 - `src/app/App.tsx`：アプリ全体の組み立てと基本レイアウト。
 - `src/features/connection/`：接続確認UIとローカルな表示状態。
-- `src/lib/api/index.ts`：UIが利用する非同期APIの窓口。Tauriの `invoke` をここに集約。
+- `src/lib/api/`：UIが利用する非同期APIの窓口。`request.ts` がIPCと日本語エラー変換、`images.ts` が検証済み画像パスのURL変換を担当。
 - UI、フォーム、画面遷移、進捗表示を担当します。Rustが扱うファイルやDBを直接操作しません。
 - 共通UIが必要になった段階で `src/components/` を作成します。
 
@@ -27,7 +27,7 @@ Commandsは薄い入口にし、検証・エラー変換とRust内部モジュ�
 
 ## Rust
 
-今後、ファイル操作、画像処理、バッチ処理、SQLiteアクセス、AI API通信を担当します。
+ファイル操作、画像検証、SQLiteアクセスを担当します。バッチ処理・AI API通信は将来の対象です。
 単一crateを維持し、機能が必要になった時点で内部モジュールを追加します。
 永続化はSQLite（rusqlite / bundled）を使用し、DBアクセスはRust側に集約します。
 
@@ -58,6 +58,43 @@ UIから任意SQLは受け付けません。ORM、コネクションプール、
 商品APIの関数を将来のWeb Adapterへの境界とし、今回はTauri実装のみとします。
 
 ## 現在の呼び出し経路
+
+### 商品画像（Phase 2）
+
+```text
+ProductList → ProductDetail / ProductImages → lib/api/images.ts
+  → commands/image.rs → services/image_service.rs
+    → infrastructure/media_storage.rs（ファイル・デコード・ハッシュ）
+    → infrastructure/db/image_repository.rs（SQLite）
+  → 検証済みプレビューパス → convertFileSrc → Asset Protocol → img
+```
+
+- `domain/image.rs`：画像メタデータ、上限、取り込み結果の契約。
+- `commands/image.rs`：商品UUIDのみを受け取り、Rustのdialog builderでファイルを選択。ダイアログと処理はasync Commandから `spawn_blocking` へ委譲。
+- `services/image_service.rs`：個別取り込み、重複確認、DB登録と補償処理、起動時整合性検査の調整。
+- `infrastructure/media_storage.rs`：サイズ制限付きコピー、内容検証、画素数・デコードメモリ制限、SHA-256、UUID相対パス、原子的rename、隔離。
+- `infrastructure/db/image_repository.rs`：既存0002 SQLに対応。表示順はINSERT内のサブクエリで割り当て、同一商品内重複はDB制約でも拒否。
+- `infrastructure/db/mod.rs`：共有 `Database` と短い `with()` 操作を共通化。画像コピー・ハッシュ・検証・プレビュー用ファイル確認の間はDB Mutexを保持しない。
+
+起動順はDB接続・トランザクション内マイグレーション → 画像参照取得の事前確認 → メディアのOSファイルロック → ロック下で最新の画像参照を再取得 → 整合性検査 → Command公開です。
+事前確認の参照一覧は破棄し、ロック取得前後に別プロセスが登録した画像を孤立ファイルと誤認しないようにします。
+DB初期化・事前確認に失敗した場合は画像ディレクトリを作成・整理しません。ロック後の再取得に失敗した場合も隔離せずエラーを返します（ロックファイルや必要なディレクトリは作成され得ます）。画像初期化だけが失敗した場合も商品管理は利用可能です。
+取り込み中はプロセス内のpermitで二重操作と整合性検査を拒否します。OSファイルロックは他プロセスの取り込み・隔離を防ぎ、終了・異常終了時に解放されます。
+
+Windowsの正式配置には `MoveFileExW`（flags=0）を使用し、配置先の存在確認と配置を一つのOS操作で行います。
+既存ファイルの置換・別ボリュームへのコピーを許可せず、ステージングからの同一ボリューム移動を維持します。
+事前の存在確認を削除したため、確認時のI/Oエラーを「存在しない」と扱うこともありません。失敗時のstagingは従来のDrop処理で整理します。
+
+DBには相対パスを保存し、Rustで商品UUID・画像UUID・MIMEから期待するパスと完全一致することを確認します。
+絶対パスはプレビュー可能な通常ファイルだけを返します。パスの各要素のシンボリックリンク・Windows reparse point（junctionを含む）を拒否します。
+ファイルシステムを同一ユーザーの別プログラムが同時に改変する攻撃全般を防ぐ仕組みではありません。
+
+Asset Protocolは `$APPLOCALDATA/media/originals/**/*` のみ、CSPは `img-src` に `asset:` と `http://asset.localhost` のみ追加します。
+Capabilitiesは `core:default` のままで、フロントエンドにdialog・fsプラグイン権限を与えません。
+Rustのdialog builderは、JS用dialog Commandが行う選択元ファイルの動的スコープ追加を呼びません。
+詳細は [ADR 0004](decisions/0004-product-image-management.md) を参照してください。
+
+### 接続確認
 
 ```text
 接続確認ボタン

@@ -28,4 +28,22 @@ small { display: block; margin-top: 6px; }
 summary { cursor: pointer; color: #526278; }
 .connection-details .connection { margin-top: 16px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.product-link { background: transparent; color: #244a8f; padding: 0; text-align: left; text-decoration: underline; overflow-wrap: anywhere; white-space: normal; }
+button.product-link:hover:not(:disabled) { background: transparent; color: #132f64; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.product-information { display: grid; grid-template-columns: minmax(80px, 120px) minmax(0, 1fr); gap: 14px 20px; margin: 0; }
+.product-information dt { font-weight: 600; }
+.product-information dd { margin: 0; overflow-wrap: anywhere; }
+.product-note { white-space: pre-wrap; }
+.product-images { margin-top: 32px; padding-top: 24px; border-top: 1px solid #dce3ed; }
+.product-images h3 { margin: 0 0 8px; }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 20px; padding: 0; list-style: none; }
+.image-card { min-width: 0; border: 1px solid #dce3ed; border-radius: 8px; overflow: hidden; }
+.image-card figure { margin: 0; }
+.image-card img, .image-placeholder { display: block; width: 100%; height: 180px; object-fit: contain; background: #f4f6f9; }
+.image-placeholder { display: grid; place-items: center; padding: 20px; text-align: center; color: #526278; }
+.image-card figcaption { padding: 12px; overflow-wrap: anywhere; }
+.image-card figcaption span { display: block; margin-top: 6px; font-size: 0.8rem; }
+.missing-image, .warning { color: #815409; }
+.import-report { line-height: 1.7; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .app { width: calc(100% - 24px); } .panel { padding: 16px; } .section-heading { align-items: flex-start; flex-direction: column; } }
