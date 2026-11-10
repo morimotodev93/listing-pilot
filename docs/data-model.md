@@ -1,4 +1,17 @@
-# 商品データモデル（Phase 3.1）
+# 商品データモデル（Phase 3.2）
+
+画像の1枚削除は `product_id` と `id` で対象を限定し、変更件数1を確認します。
+同一IMMEDIATEトランザクションで残存画像を `sort_order, created_at, id` 順に0から連番化し、
+商品・他画像のメタデータと `products.updated_at` は保持します。最後の画像も削除できます。
+不在・別商品の画像・不正UUIDは `image_not_found` を返します。
+スキーマバージョンは2のまま、既存SQL・一意制約を維持し、新規テーブル・削除履歴は追加しません。
+
+DB確定後の管理画像は `media/quarantine/deleted/{商品UUID}/{画像UUID}.{ext}` へ非置換移動します。
+返却契約は `deleted: true`、`affected_image_count: 1` と、隔離済み・欠落・隔離保留の各件数です。
+隔離失敗でもDB削除は維持し、元の管理画像を保持します。参照を失ったまま終了した画像は次回起動時に
+`media/quarantine/{UUID}.recovered` へ回収され得ます。削除履歴を保存しないため必ずdeletedに分類する保証はありません。
+COMMIT結果の確認不能時は成功を返さず、管理画像を動かしません。
+保護領域はAsset Protocolで公開せず、アプリ内復元や自動消去も行いません。
 
 ## products
 

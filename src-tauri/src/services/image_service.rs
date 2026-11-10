@@ -1,6 +1,7 @@
 use crate::{
     domain::image::{
-        ImagePreview, ImportItem, ImportReport, ImportStatus, MAX_IMPORT_FILES, ProductImage,
+        DeleteImageReport, ImagePreview, ImportItem, ImportReport, ImportStatus, MAX_IMPORT_FILES,
+        ProductImage,
     },
     error::AppError,
     infrastructure::{
@@ -57,6 +58,72 @@ pub fn list(
             image,
         })
         .collect())
+}
+
+pub fn delete(
+    database: &Database,
+    media: &MediaStorage,
+    product_id: &str,
+    image_id: &str,
+) -> Result<DeleteImageReport, AppError> {
+    let _permit = media.begin_import()?;
+    for id in [product_id, image_id] {
+        if !Uuid::parse_str(id).is_ok_and(|uuid| uuid.to_string() == id) {
+            return Err(AppError::ImageNotFound);
+        }
+    }
+    let image = database.with(|connection| repository::get(connection, product_id, image_id))?;
+    media.deletion_file_exists(&image)?;
+    let commit = database.with_mut(|connection| {
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current = repository::get(&transaction, product_id, image_id)?;
+        if current != image {
+            return Err(AppError::StaleData);
+        }
+        repository::delete(&transaction, product_id, image_id)?;
+        let remaining = repository::list(&transaction, product_id)?;
+        let ids = remaining
+            .into_iter()
+            .map(|image| image.id)
+            .collect::<Vec<_>>();
+        repository::update_order(&transaction, product_id, &ids)?;
+        // Keep statement/validation errors distinct from ambiguous COMMIT errors.
+        Ok(transaction.commit().map_err(AppError::from))
+    })?;
+    resolve_delete_commit(database, &image, commit)?;
+    Ok(finish_delete(media, &image))
+}
+
+pub(crate) fn resolve_delete_commit(
+    database: &Database,
+    image: &ProductImage,
+    commit: Result<(), AppError>,
+) -> Result<(), AppError> {
+    if let Err(error) = commit {
+        match database.with(|connection| {
+            if !connection.is_autocommit() {
+                return Err(AppError::ImageDeletionUnknown);
+            }
+            repository::references_image_or_path(connection, image)
+        }) {
+            Ok(false) => (),
+            Ok(true) => return Err(error),
+            Err(_) => return Err(AppError::ImageDeletionUnknown),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn finish_delete(media: &MediaStorage, image: &ProductImage) -> DeleteImageReport {
+    let result = media.quarantine_deleted(image);
+    DeleteImageReport {
+        deleted: true,
+        affected_image_count: 1,
+        quarantined_image_count: usize::from(matches!(result, Ok(true))),
+        missing_image_count: usize::from(matches!(result, Ok(false))),
+        pending_quarantine_count: usize::from(result.is_err()),
+    }
 }
 
 pub fn reorder(

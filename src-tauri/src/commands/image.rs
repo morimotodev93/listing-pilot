@@ -1,5 +1,5 @@
 use crate::{
-    domain::image::{ImagePreview, ImportReport},
+    domain::image::{DeleteImageReport, ImagePreview, ImportReport},
     error::AppError,
     infrastructure::{
         db::{Database, product_repository},
@@ -12,6 +12,22 @@ use tauri::{State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 pub struct Media(pub Result<Arc<MediaStorage>, AppError>);
+
+#[tauri::command]
+pub async fn delete_product_image(
+    database: State<'_, Database>,
+    media: State<'_, Media>,
+    product_id: String,
+    image_id: String,
+) -> Result<DeleteImageReport, AppError> {
+    let database = database.inner().clone();
+    let media = media.0.as_ref().map_err(Clone::clone)?.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        image_service::delete(&database, &media, &product_id, &image_id)
+    })
+    .await
+    .map_err(|_| AppError::ImageDeletionUnknown)?
+}
 
 #[tauri::command]
 pub async fn reorder_product_images(

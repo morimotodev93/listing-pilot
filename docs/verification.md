@@ -1,5 +1,76 @@
 # 開発環境の検証結果
 
+## Phase 3.2 画像1枚の安全な削除（2026-11-10 日本時間）
+
+開始時はmain / HEAD `46bd236`、作業ツリーはクリーン。Commit・Push・ブランチ切り替えは行っていない。
+確認dialog付き削除、`delete_product_image`、単一IMMEDIATE内のDELETEと順序正規化、DB確定後の非置換隔離を追加した。
+DBスキーマ、0001/0002 SQL、依存関係・lockfile、識別子、CSP・Capabilities・Asset Protocolは変更していない。
+
+### 自動検証
+
+| コマンド | 最終結果 |
+| --- | --- |
+| `npm run build` | 終了コード0。TypeScript検査とVite本番ビルド成功 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了コード0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了コード0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了コード0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了コード0、57 passed / 0 failed（既存45＋追加12） |
+| `git diff --check` | 終了コード0 |
+
+追加12テストの複数ケースで次を確認した。
+
+- 先頭画像の削除、同一商品・別商品の他画像保持、0始まり連番、新メイン画像、最後の画像の削除、再接続後の保持。
+- 商品更新日時・他画像メタデータ・管理画像バイト列・取り込み元SHA-256の保持。
+- 不在・別商品・不正UUIDの拒否、改ざんDBパス・ディレクトリ・Windows junctionの拒否。
+- DELETE失敗と順序更新途中の失敗による全変更ロールバック、ファイル非移動、ガード再取得。
+- 遅延外部キーによる実COMMIT失敗後の参照再確認。結果解決ヘルパーへエラーを注入した、確定済み削除・画像ID参照・パス参照・非autocommit・DB参照不能の各分岐。
+- 非置換隔離・同一バイト保持、既存隔離先との衝突時に元画像と衝突先を保持し、DB削除済み・保留件数を返すこと。
+- Windows共有モード0で読めない元画像を欠落と扱わずDB削除前に拒否すること、読み取り可能でも削除共有のないファイルは移動失敗・保留になること。
+- 共通permit保持中に削除・取り込み・並べ替えがDB Mutex取得前にbusyで返ること。
+- DB削除済み・未隔離の画像の起動時回収、deleted領域の非再処理、最終隔離時の欠落・不正ファイルの再判定。
+
+全テストは専用一時DBとメディアを使用。本番LocalData・既存test-fixturesは使用していない。
+初回の新規junctionテストはcmdのmklinkへ渡すパス中の `/` がスイッチと解釈されて失敗した。
+検証ハーネスのパスをcanonicalizeした親とファイル名で組み立て直し、対象テストと全57テストが成功した。
+初回のViteは制限環境の `spawn EPERM` で失敗。同一コマンドを通常権限で再実行し成功した。
+
+### Windows実WebView2
+
+`npm run tauri dev -- --config .verification/phase32/config.json` で、公式 `appDirectoriesOverride` を
+今回新規作成した `.verification/phase32/data` に限定して起動した。
+新規8×8 PNG 4枚、専用商品だけを使い、CDPによるReact UI操作・実IPCとネイティブ画像選択で確認した。
+
+| 境界 | 観測結果 |
+| --- | --- |
+| 取り込み → UI | 4枚取り込み・表示成功 |
+| 確認 → キャンセル | 対象ファイル名と確認dialog表示、キャンセルボタンの初期フォーカス、キャンセル前後で画像API結果一致 |
+| 確定 → DB → UI | 先頭画像だけ削除、残存3枚のID・連番一致、新メイン表示、削除後の前後移動成功 |
+| 正常終了 → 再起動 | 3枚の順序・画像表示が保持され、削除済み画像は表示されない |
+| 隔離先衝突 → UI | 専用の衝突ファイルを置き、DB削除成功・隔離保留の警告を実画面で確認 |
+| 最後の画像削除 | 残り3枚を1枚ずつ削除し、既存空状態を表示。専用SQLiteの画像件数0をアプリ終了後に確認 |
+| 保留 → 次回起動 | 元の管理画像が `.recovered` に回収され、元バイト列と一致 |
+| ファイル保持 | 正常隔離3枚は選択元とバイト一致、衝突ファイルは元のsentinelバイトを維持、元画像4枚を保持 |
+| 実行時エラー | prepare/check/restart/finalの各検証区間でJavaScript例外・CSP違反0件 |
+
+既存の検証成果物は変更せず、今回の証跡はGit対象外の `.verification/phase32/` に保存した。
+`desktop.png`、`before.json`、`order.json`、各モードの結果JSON、`file-results.json`、スクリプトと専用データを保持した。
+再起動の一回は前プロセス終了直後のViteポート1420競合で失敗した。開発サーバー終了確認後に再実行して成功した。
+Vite watcherは専用WebView2プロファイルの一時ファイルに対して `EBUSY` を報告したが、各操作検証は完了した。
+検証用アプリは最後に正常終了した。
+
+### 変更ファイルと残る制限
+
+Rust：`commands/image.rs`、`domain/image.rs`、`error.rs`、`image_tests.rs`、
+`infrastructure/db/image_repository.rs`、`infrastructure/media_storage.rs`、`lib.rs`、`services/image_service.rs`。
+React/API：`ProductImages.tsx`、`imageTypes.ts`、`lib/api/images.ts`、`lib/api/request.ts`。
+文書：`README.md`、`docs/architecture.md`、`docs/data-model.md`、本書、新規ADR 0005。
+
+今回 `npm run tauri build`、インストーラー導入、配布版CSP下の削除、別PC、電源断、実ディスク故障は未検証。
+UI保存中ボタン無効化・二重Command件数の厳密な実行時計測は未実施。同期refガードはコード確認、Rustの競合拒否は自動テストで検証した。
+COMMIT後にエラーが返る実ストレージ障害は再現せず、結果解決分岐をテスト入力で確認した。
+パス検査直後の外部プログラムによる親差し替えは既存設計と同じ制約があり、専用領域のアクセス権を前提とする。
+Windows以外の削除隔離は安全側の保留を返す。商品削除・アプリ内復元・完全消去は未実装。
+
 ## Phase 3.1 画像の表示順（2026-11-10 日本時間）
 
 開始時の作業ツリーはクリーン。Commit・Push・ブランチ切り替えは行っていない。

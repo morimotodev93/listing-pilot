@@ -366,6 +366,63 @@ impl MediaStorage {
         place_new(&staged.path, &destination).map_err(|_| AppError::FileSave)
     }
 
+    // Missing is accepted only after checking every existing ancestor without
+    // following links. Permission/I/O errors must never become "missing".
+    pub fn deletion_file_exists(&self, image: &ProductImage) -> Result<bool, AppError> {
+        let path = self.image_path(image)?;
+        directory(&self.root, false)?;
+        let relative = path
+            .strip_prefix(&self.root)
+            .map_err(|_| AppError::UnsafeMediaPath)?;
+        let mut current = self.root.clone();
+        for component in relative.components() {
+            current.push(component);
+            let metadata = match fs::symlink_metadata(&current) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(_) => return Err(AppError::FileRead),
+            };
+            if is_link(&metadata)
+                || (current != path && !metadata.is_dir())
+                || (current == path && !metadata.is_file())
+            {
+                return Err(AppError::UnsafeMediaPath);
+            }
+        }
+        open_read(&path)?;
+        Ok(true)
+    }
+
+    pub fn quarantine_deleted(&self, image: &ProductImage) -> Result<bool, AppError> {
+        if !self.deletion_file_exists(image)? {
+            return Ok(false);
+        }
+        let source = self.image_path(image)?;
+        let destination = self
+            .root
+            .join("quarantine/deleted")
+            .join(&image.product_id)
+            .join(source.file_name().ok_or(AppError::UnsafeMediaPath)?);
+        directory(destination.parent().ok_or(AppError::UnsafeMediaPath)?, true)?;
+        // Revalidate source after destination creation. No copy/delete fallback.
+        if !self.deletion_file_exists(image)? {
+            return Ok(false);
+        }
+        #[cfg(windows)]
+        let moved = place_new(&source, &destination);
+        // Other platforms retain the file until an atomic no-replace move is
+        // implemented; hard-link plus unlink is not an atomic move.
+        #[cfg(not(windows))]
+        let moved: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
+        match moved {
+            Ok(()) => Ok(true),
+            Err(_) => match self.deletion_file_exists(image) {
+                Ok(false) => Ok(false),
+                _ => Err(AppError::FileSave),
+            },
+        }
+    }
+
     pub fn remove_unregistered(&self, image: &ProductImage) -> Result<(), AppError> {
         let path = self.image_path(image)?;
         safe_regular_file(&path)?;

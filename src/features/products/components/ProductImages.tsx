@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { importProductImages, listProductImages, reorderProductImages } from "../../../lib/api/images";
-import type { ImportReport, ProductImage } from "../imageTypes";
+import { deleteProductImage, importProductImages, listProductImages, reorderProductImages } from "../../../lib/api/images";
+import type { DeleteImageReport, ImportReport, ProductImage } from "../imageTypes";
 
-type CardProps = { image: ProductImage; index: number; count: number; busy: boolean; onMove: (id: string, direction: -1 | 1) => void };
-function ImageCard({ image, index, count, busy, onMove }: CardProps) {
+type CardProps = { image: ProductImage; index: number; count: number; busy: boolean; onMove: (id: string, direction: -1 | 1) => void; onDelete: (image: ProductImage) => void };
+function ImageCard({ image, index, count, busy, onMove, onDelete }: CardProps) {
   const [failed, setFailed] = useState(false);
   return <li className="image-card"><figure>
     {image.preview_url && !failed ?
@@ -17,7 +17,7 @@ function ImageCard({ image, index, count, busy, onMove }: CardProps) {
   </figure>{count > 1 && <div className="detail-actions">
     <button type="button" className="secondary" disabled={busy || index === 0} aria-label={`${index + 1}枚目の${image.original_filename}を前へ移動`} onClick={() => onMove(image.id, -1)}>前へ移動</button>
     <button type="button" className="secondary" disabled={busy || index === count - 1} aria-label={`${index + 1}枚目の${image.original_filename}を後ろへ移動`} onClick={() => onMove(image.id, 1)}>後ろへ移動</button>
-  </div>}</li>;
+  </div>}<button type="button" className="secondary" disabled={busy} aria-label={`${index + 1}枚目の${image.original_filename}を削除`} onClick={() => onDelete(image)}>削除</button></li>;
 }
 
 type Props = { productId: string; onBusyChange: (busy: boolean) => void };
@@ -26,6 +26,10 @@ export function ProductImages({ productId, onBusyChange }: Props) {
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ProductImage | null>(null);
+  const [deleteReport, setDeleteReport] = useState<DeleteImageReport | null>(null);
+  const confirmDialog = useRef<HTMLDialogElement>(null);
   const [orderReady, setOrderReady] = useState(false);
   const [error, setError] = useState("");
   const [report, setReport] = useState<ImportReport | null>(null);
@@ -43,8 +47,33 @@ export function ProductImages({ productId, onBusyChange }: Props) {
   }, [productId]);
   useEffect(() => { void refresh(); return () => { generation.current++; }; }, [refresh]);
 
-  async function importImages() {
+  function askDelete(image: ProductImage) {
+    if (operation.current || loading || !orderReady || deleteTarget) return;
+    setDeleteTarget(image);
+    confirmDialog.current?.showModal();
+  }
+  function cancelDelete() {
     if (operation.current) return;
+    confirmDialog.current?.close();
+    setDeleteTarget(null);
+  }
+  async function deleteImage() {
+    if (operation.current || !deleteTarget) return;
+    operation.current = true; setDeleting(true); onBusyChange(true);
+    setError(""); setReport(null); setDeleteReport(null);
+    try {
+      setDeleteReport(await deleteProductImage({ productId, imageId: deleteTarget.id }));
+      confirmDialog.current?.close(); setDeleteTarget(null);
+      await refresh();
+    } catch (error: unknown) {
+      confirmDialog.current?.close(); setDeleteTarget(null);
+      setError(error instanceof Error ? error.message : "画像を削除できませんでした。状態を確認して再度お試しください。");
+      await refresh(true);
+    } finally { operation.current = false; setDeleting(false); onBusyChange(false); }
+  }
+  async function importImages() {
+    if (operation.current || deleteTarget) return;
+    setDeleteReport(null);
     operation.current = true; setImporting(true); onBusyChange(true); setError(""); setReport(null);
     try {
       setReport(await importProductImages(productId));
@@ -53,7 +82,8 @@ export function ProductImages({ productId, onBusyChange }: Props) {
     finally { operation.current = false; setImporting(false); onBusyChange(false); }
   }
   async function moveImage(id: string, direction: -1 | 1) {
-    if (operation.current || loading || !orderReady) return;
+    if (operation.current || loading || !orderReady || deleteTarget) return;
+    setDeleteReport(null);
     const index = images.findIndex(image => image.id === id);
     const target = index + direction;
     if (index < 0 || target < 0 || target >= images.length) return;
@@ -68,14 +98,26 @@ export function ProductImages({ productId, onBusyChange }: Props) {
       await refresh(true);
     } finally { operation.current = false; setSaving(false); onBusyChange(false); }
   }
-  const busy = loading || importing || saving;
+  const busy = loading || importing || saving || deleting;
+  const controlsBusy = busy || deleteTarget !== null;
   const imported = report?.items.filter(item => item.status === "imported").length ?? 0;
   const duplicates = report?.items.filter(item => item.status === "duplicate").length ?? 0;
   const failures = report?.items.filter(item => item.status === "failed").length ?? 0;
   return <section className="product-images" aria-labelledby="images-heading" aria-busy={busy}>
     <div className="section-heading"><div><h3 id="images-heading">商品画像</h3>
       <p className="muted">JPEG・PNG・WebP / 1枚20MiB・4,000万画素 / 1回20枚まで</p></div>
-      <button type="button" disabled={busy} onClick={() => void importImages()}>{importing ? "画像を選択・取り込み中…" : "画像を取り込む"}</button></div>
+      <button type="button" disabled={controlsBusy} onClick={() => void importImages()}>{importing ? "画像を選択・取り込み中…" : "画像を取り込む"}</button></div>
+    <dialog ref={confirmDialog} aria-labelledby="delete-image-heading" onCancel={event => { event.preventDefault(); cancelDelete(); }}>
+      <h4 id="delete-image-heading">画像を削除しますか？</h4>
+      <p><strong>{deleteTarget?.original_filename}</strong></p>
+      {deleteTarget?.preview_url && <img src={deleteTarget.preview_url} alt={`削除対象：${deleteTarget.original_filename}`} width="160" />}
+      <p>この画像を商品から削除します。管理画像ファイルは保護領域に保持されますが、アプリ内から元に戻すことはできません。取り込み元ファイルは変更されません。</p>
+      <div className="detail-actions"><button type="button" className="secondary" autoFocus disabled={deleting} onClick={cancelDelete}>キャンセル</button>
+        <button type="button" disabled={deleting} onClick={() => void deleteImage()}>{deleting ? "削除中…" : "削除する"}</button></div>
+    </dialog>
+    {deleteReport && <p role="status" className={deleteReport.pending_quarantine_count ? "warning" : "success"}>{deleteReport.pending_quarantine_count
+      ? "画像の登録情報は削除しましたが、管理画像ファイルの隔離が完了していません。次回起動時に再確認されます。"
+      : "画像を削除しました。"}</p>}
     {saving && <p role="status">画像の並び順を保存しています…</p>}
     {importing && <p role="status">画像を選択してください。取り込みが終わるまでこの画面でお待ちください。</p>}
     {error && <p className="error" role="alert">{error}</p>}
@@ -85,8 +127,8 @@ export function ProductImages({ productId, onBusyChange }: Props) {
         <li key={index}>{item.filename}：{item.message}</li>)}</ul>}
     </div>}
     {loading ? <p role="status">画像を読み込んでいます…</p> : images.length ?
-      <ul className="image-grid">{images.map((image, index) => <ImageCard key={image.id} image={image} index={index} count={images.length} busy={busy || !orderReady} onMove={(id, direction) => void moveImage(id, direction)} />)}</ul> :
+      <ul className="image-grid">{images.map((image, index) => <ImageCard key={image.id} image={image} index={index} count={images.length} busy={controlsBusy || !orderReady} onDelete={askDelete} onMove={(id, direction) => void moveImage(id, direction)} />)}</ul> :
       !error && <div className="empty"><h4>画像はまだありません</h4><p>「画像を取り込む」から複数の写真を選択できます。元画像はそのまま保持されます。</p></div>}
-    <button type="button" className="secondary" disabled={busy} onClick={() => void refresh()}>画像を再読み込み</button>
+    <button type="button" className="secondary" disabled={controlsBusy} onClick={() => void refresh()}>画像を再読み込み</button>
   </section>;
 }

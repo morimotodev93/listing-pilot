@@ -1004,3 +1004,466 @@ fn directory_junctions_are_rejected_without_following_them() {
     assert!(source.exists());
     fs::remove_dir(junction).unwrap();
 }
+
+fn deleted_path(fixture: &Fixture, image: &ProductImage) -> PathBuf {
+    fixture
+        .temp
+        .0
+        .join("media/quarantine/deleted")
+        .join(&image.product_id)
+        .join(format!("{}.png", image.id))
+}
+fn delete_image(
+    fixture: &Fixture,
+    image: &ProductImage,
+) -> Result<crate::domain::image::DeleteImageReport, AppError> {
+    image_service::delete(&fixture.db, &fixture.media, &fixture.product.id, &image.id)
+}
+
+#[test]
+fn delete_main_normalizes_order_preserves_other_products_metadata_sources_and_restart() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 4);
+    let before = fixture.ordered();
+    let other = fixture
+        .db
+        .with(|db| product_service::create(db, input("other-delete")))
+        .unwrap();
+    image_service::import_files(
+        &fixture.db,
+        &fixture.media,
+        &other.id,
+        &[fixture.temp.0.join("image-0.png")],
+    )
+    .unwrap();
+    let other_before = fixture
+        .db
+        .with(|db| repository::list(db, &other.id))
+        .unwrap();
+    let bytes = fs::read(fixture.media.image_path(&before[0]).unwrap()).unwrap();
+    let report = delete_image(&fixture, &before[0]).unwrap();
+    assert!(report.deleted);
+    assert_eq!(
+        (
+            report.affected_image_count,
+            report.quarantined_image_count,
+            report.missing_image_count,
+            report.pending_quarantine_count
+        ),
+        (1, 1, 0, 0)
+    );
+    assert!(!fixture.media.image_path(&before[0]).unwrap().exists());
+    assert_eq!(fs::read(deleted_path(&fixture, &before[0])).unwrap(), bytes);
+    let saved = fixture.ordered();
+    for (index, image) in saved.iter().enumerate() {
+        let mut expected = before[index + 1].clone();
+        expected.sort_order = index as i64;
+        assert_eq!(image, &expected);
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(fs::read(fixture.media.image_path(image).unwrap()).unwrap())
+            ),
+            image.sha256
+        );
+    }
+    assert_eq!(saved[0].id, before[1].id);
+    for image in &before {
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(fs::read(fixture.temp.0.join(&image.original_filename)).unwrap())
+            ),
+            image.sha256
+        );
+    }
+    fixture
+        .db
+        .with(|db| {
+            assert_eq!(
+                product_service::get(db, &fixture.product.id)?,
+                fixture.product
+            );
+            assert_eq!(repository::list(db, &other.id)?, other_before);
+            Ok(())
+        })
+        .unwrap();
+    let destination = deleted_path(&fixture, &before[0]);
+    let Fixture {
+        media,
+        db,
+        temp,
+        product,
+    } = fixture;
+    drop(db);
+    drop(media);
+    let reopened = connection::open(&temp.0.join("test.sqlite3")).unwrap();
+    let media =
+        image_service::initialize_after_preflight(&reopened, &temp.0.join("media")).unwrap();
+    assert_eq!(repository::list(&reopened, &product.id).unwrap(), saved);
+    assert_eq!(fs::read(destination).unwrap(), bytes);
+    assert!(saved.iter().all(|image| media.preview(image).is_some()));
+    drop(media);
+    drop(reopened);
+}
+
+#[test]
+fn delete_last_and_confirmed_missing_files_including_missing_product_directory() {
+    for missing in 0..3 {
+        let fixture = Fixture::new();
+        fixture.import_distinct(0, 1);
+        let image = fixture.ordered().remove(0);
+        let path = fixture.media.image_path(&image).unwrap();
+        if missing > 0 {
+            fs::remove_file(&path).unwrap();
+        }
+        if missing == 2 {
+            fs::remove_dir(path.parent().unwrap()).unwrap();
+        }
+        let report = delete_image(&fixture, &image).unwrap();
+        assert_eq!(report.missing_image_count, usize::from(missing > 0));
+        assert_eq!(report.quarantined_image_count, usize::from(missing == 0));
+        assert!(fixture.ordered().is_empty());
+        assert!(
+            image_service::list(&fixture.db, &fixture.media, &fixture.product.id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn delete_rejects_unknown_invalid_and_other_product_ids_without_changes() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 1);
+    let before = fixture.ordered();
+    let other = fixture
+        .db
+        .with(|db| product_service::create(db, input("other")))
+        .unwrap();
+    for (product, image) in [
+        (&fixture.product.id, Uuid::new_v4().to_string()),
+        (&other.id, before[0].id.clone()),
+        (&fixture.product.id, "../unsafe".into()),
+    ] {
+        assert_eq!(
+            image_service::delete(&fixture.db, &fixture.media, product, &image),
+            Err(AppError::ImageNotFound)
+        );
+    }
+    assert_eq!(fixture.ordered(), before);
+    assert!(fixture.media.preview(&before[0]).is_some());
+}
+
+#[test]
+fn delete_sql_failures_rollback_delete_and_all_normalization_updates() {
+    for trigger in [
+        "BEFORE DELETE ON product_images",
+        "BEFORE UPDATE OF sort_order ON product_images WHEN NEW.sort_order = 1",
+    ] {
+        let fixture = Fixture::new();
+        fixture.import_distinct(0, 4);
+        let before = fixture.ordered();
+        fixture.db.with(|db| { db.execute_batch(&format!("CREATE TRIGGER fail_delete {trigger} BEGIN SELECT RAISE(ABORT, 'injected'); END;"))?; Ok(()) }).unwrap();
+        assert_eq!(
+            delete_image(&fixture, &before[0]),
+            Err(AppError::DatabaseOperation)
+        );
+        assert_eq!(fixture.ordered(), before);
+        for image in &before {
+            assert!(fixture.media.preview(image).is_some());
+        }
+        assert_eq!(fixture.count("quarantine"), 0);
+        fixture
+            .db
+            .with(|db| {
+                db.execute_batch("DROP TRIGGER fail_delete")?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(delete_image(&fixture, &before[0]).unwrap().deleted);
+    }
+}
+
+#[test]
+fn delete_commit_failure_rechecks_rolled_back_references_and_preserves_file() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 1);
+    let before = fixture.ordered();
+    fixture.db.with(|db| {
+        db.execute_batch("CREATE TABLE commit_blocker (image_id TEXT REFERENCES product_images(id) DEFERRABLE INITIALLY DEFERRED)")?;
+        db.execute("INSERT INTO commit_blocker VALUES (?1)", [&before[0].id])?; Ok(())
+    }).unwrap();
+    assert_eq!(
+        delete_image(&fixture, &before[0]),
+        Err(AppError::DatabaseOperation)
+    );
+    assert_eq!(fixture.ordered(), before);
+    assert!(fixture.media.preview(&before[0]).is_some());
+    assert_eq!(fixture.count("quarantine"), 0);
+}
+
+#[test]
+fn delete_commit_ambiguity_checks_id_path_and_unknown_database_state() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 1);
+    let image = fixture.ordered().remove(0);
+    let resolve = || {
+        image_service::resolve_delete_commit(&fixture.db, &image, Err(AppError::DatabaseOperation))
+    };
+    assert_eq!(resolve(), Err(AppError::DatabaseOperation));
+    fixture
+        .db
+        .with(|db| {
+            repository::delete(db, &image.product_id, &image.id)?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(resolve(), Ok(()));
+    let mut replacement = image.clone();
+    replacement.id = Uuid::new_v4().to_string();
+    fixture
+        .db
+        .with(|db| repository::create(db, &replacement))
+        .unwrap();
+    assert_eq!(resolve(), Err(AppError::DatabaseOperation)); // same path, different ID
+    fixture
+        .db
+        .with(|db| {
+            repository::delete(db, &replacement.product_id, &replacement.id)?;
+            replacement.relative_path =
+                MediaStorage::relative_path(&image.product_id, &replacement.id, "png")?;
+            replacement.id = image.id.clone();
+            repository::create(db, &replacement)
+        })
+        .unwrap();
+    assert_eq!(resolve(), Err(AppError::DatabaseOperation)); // same ID, different path
+    fixture
+        .db
+        .with(|db| {
+            db.execute_batch("BEGIN IMMEDIATE")?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(resolve(), Err(AppError::ImageDeletionUnknown));
+    fixture
+        .db
+        .with(|db| {
+            db.execute_batch("ROLLBACK; DROP TABLE product_images")?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(resolve(), Err(AppError::ImageDeletionUnknown));
+    assert!(fixture.media.preview(&image).is_some());
+}
+
+#[test]
+fn delete_quarantine_collision_never_overwrites_and_restart_recovers_pending() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 1);
+    let image = fixture.ordered().remove(0);
+    let bytes = fs::read(fixture.media.image_path(&image).unwrap()).unwrap();
+    let destination = deleted_path(&fixture, &image);
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::write(&destination, b"previous quarantined image").unwrap();
+    let report = delete_image(&fixture, &image).unwrap();
+    assert_eq!(
+        (
+            report.deleted,
+            report.pending_quarantine_count,
+            report.missing_image_count
+        ),
+        (true, 1, 0)
+    );
+    assert!(fixture.ordered().is_empty());
+    assert_eq!(
+        fs::read(&destination).unwrap(),
+        b"previous quarantined image"
+    );
+    assert_eq!(
+        fs::read(fixture.media.image_path(&image).unwrap()).unwrap(),
+        bytes
+    );
+    let Fixture {
+        media, db, temp, ..
+    } = fixture;
+    drop(db);
+    drop(media);
+    let reopened = connection::open(&temp.0.join("test.sqlite3")).unwrap();
+    let media =
+        image_service::initialize_after_preflight(&reopened, &temp.0.join("media")).unwrap();
+    let recovered = fs::read_dir(temp.0.join("media/quarantine"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "recovered"))
+        .unwrap();
+    assert_eq!(fs::read(recovered).unwrap(), bytes);
+    assert_eq!(
+        fs::read(destination).unwrap(),
+        b"previous quarantined image"
+    );
+    drop(media);
+    drop(reopened);
+}
+
+#[test]
+fn delete_and_import_reorder_share_guard_before_database_lock() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 1);
+    let image = fixture.ordered().remove(0);
+    let ids = vec![image.id.clone()];
+    let permit = fixture.media.begin_import().unwrap();
+    {
+        let _db_lock = fixture.db.0.lock().unwrap();
+        assert_eq!(delete_image(&fixture, &image), Err(AppError::MediaBusy));
+        assert_eq!(fixture.reorder(&ids, &ids), Err(AppError::MediaBusy));
+        assert!(matches!(
+            image_service::import_files(&fixture.db, &fixture.media, &fixture.product.id, &[]),
+            Err(AppError::MediaBusy)
+        ));
+    }
+    drop(permit);
+    assert!(delete_image(&fixture, &image).unwrap().deleted);
+    fixture.import_distinct(1, 1);
+}
+
+#[test]
+fn delete_rejects_unsafe_database_paths_and_non_regular_sources_before_db_changes() {
+    for unsafe_path in [true, false] {
+        let fixture = Fixture::new();
+        fixture.import_distinct(0, 1);
+        let image = fixture.ordered().remove(0);
+        let path = fixture.media.image_path(&image).unwrap();
+        if unsafe_path {
+            fixture
+                .db
+                .with(|db| {
+                    db.execute("UPDATE product_images SET relative_path = '../unsafe'", [])?;
+                    Ok(())
+                })
+                .unwrap();
+        } else {
+            fs::remove_file(&path).unwrap();
+            fs::create_dir(&path).unwrap();
+        }
+        assert_eq!(
+            delete_image(&fixture, &image),
+            Err(AppError::UnsafeMediaPath)
+        );
+        assert_eq!(fixture.ordered().len(), 1);
+        assert!(path.exists());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn delete_rejects_junction_in_source_and_retains_pending_for_destination_junction() {
+    use std::process::Command;
+    for source_link in [true, false] {
+        let fixture = Fixture::new();
+        fixture.import_distinct(0, 1);
+        let image = fixture.ordered().remove(0);
+        let original = fixture.media.image_path(&image).unwrap();
+        let bytes = fs::read(&original).unwrap();
+        let target = fixture.temp.0.join("junction-target");
+        fs::create_dir(&target).unwrap();
+        let link = if source_link {
+            fs::rename(&original, target.join(original.file_name().unwrap())).unwrap();
+            fs::remove_dir(original.parent().unwrap()).unwrap();
+            original.parent().unwrap().to_path_buf()
+        } else {
+            fixture
+                .temp
+                .0
+                .join("media")
+                .join("quarantine")
+                .join("deleted")
+        };
+        // cmd's mklink treats forward slashes embedded in a path as switches.
+        let link = fs::canonicalize(link.parent().unwrap())
+            .unwrap()
+            .join(link.file_name().unwrap());
+        let result = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "junction creation failed: {:?}",
+            result
+        );
+        if source_link {
+            assert_eq!(
+                delete_image(&fixture, &image),
+                Err(AppError::UnsafeMediaPath)
+            );
+            assert_eq!(fixture.ordered().len(), 1);
+        } else {
+            let report = delete_image(&fixture, &image).unwrap();
+            assert_eq!(report.pending_quarantine_count, 1);
+            assert_eq!(fs::read(&original).unwrap(), bytes);
+        }
+        fs::remove_dir(link).unwrap();
+        if source_link {
+            assert_eq!(
+                fs::read(target.join(original.file_name().unwrap())).unwrap(),
+                bytes
+            );
+        } else {
+            assert_eq!(fs::read_dir(target).unwrap().count(), 0);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn delete_unreadable_source_is_not_missing_and_locked_move_is_pending() {
+    use std::os::windows::fs::OpenOptionsExt;
+    for share_mode in [0, 1] {
+        let fixture = Fixture::new();
+        fixture.import_distinct(0, 1);
+        let image = fixture.ordered().remove(0);
+        let path = fixture.media.image_path(&image).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(share_mode)
+            .open(&path)
+            .unwrap();
+        if share_mode == 0 {
+            assert_eq!(delete_image(&fixture, &image), Err(AppError::FileRead));
+            assert_eq!(fixture.ordered().len(), 1);
+        } else {
+            let report = delete_image(&fixture, &image).unwrap();
+            assert_eq!(
+                (report.pending_quarantine_count, report.missing_image_count),
+                (1, 0)
+            );
+            assert!(fixture.ordered().is_empty());
+        }
+        drop(lock);
+        assert!(path.exists());
+    }
+}
+
+#[test]
+fn delete_finalization_rechecks_missing_and_unsafe_sources() {
+    for unsafe_source in [true, false] {
+        let fixture = Fixture::new();
+        fixture.import_distinct(0, 1);
+        let image = fixture.ordered().remove(0);
+        fixture
+            .db
+            .with(|db| repository::delete(db, &image.product_id, &image.id))
+            .unwrap();
+        let path = fixture.media.image_path(&image).unwrap();
+        fs::remove_file(&path).unwrap();
+        if unsafe_source {
+            fs::create_dir(&path).unwrap();
+        }
+        let report = image_service::finish_delete(&fixture.media, &image);
+        assert_eq!(report.pending_quarantine_count, usize::from(unsafe_source));
+        assert_eq!(report.missing_image_count, usize::from(!unsafe_source));
+    }
+}

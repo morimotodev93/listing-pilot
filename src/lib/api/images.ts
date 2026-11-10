@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { ImportItem, ImportReport, ProductImage, ReorderProductImagesInput } from "../../features/products/imageTypes";
+import type { DeleteImageInput, DeleteImageReport, ImportItem, ImportReport, ProductImage, ReorderProductImagesInput } from "../../features/products/imageTypes";
 import { errorMessage, request } from "./request";
 
 type ImageResponse = Omit<ProductImage, "preview_url"> & { preview_path: string | null };
@@ -25,4 +25,8 @@ export async function importProductImages(productId: string): Promise<ImportRepo
   return { cancelled: report.cancelled, items: report.items.map(({ error, ...item }) => ({
     ...item, message: error ? errorMessage(error) : null,
   })) };
+}
+
+export async function deleteProductImage(input: DeleteImageInput): Promise<DeleteImageReport> {
+  return request<DeleteImageReport>("delete_product_image", { ...input });
 }

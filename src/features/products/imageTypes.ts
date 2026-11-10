@@ -23,3 +23,12 @@ export type ImportItem = {
   message: string | null;
 };
 export type ImportReport = { cancelled: boolean; items: ImportItem[] };
+
+export type DeleteImageInput = { productId: string; imageId: string };
+export type DeleteImageReport = {
+  deleted: true;
+  affected_image_count: number;
+  quarantined_image_count: number;
+  missing_image_count: number;
+  pending_quarantine_count: number;
+};

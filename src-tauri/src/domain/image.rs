@@ -57,3 +57,12 @@ impl ImportReport {
         }
     }
 }
+
+#[derive(Debug, PartialEq, Serialize)]
+pub struct DeleteImageReport {
+    pub deleted: bool,
+    pub affected_image_count: usize,
+    pub quarantined_image_count: usize,
+    pub missing_image_count: usize,
+    pub pending_quarantine_count: usize,
+}

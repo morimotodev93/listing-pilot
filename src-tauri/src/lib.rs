@@ -51,6 +51,7 @@ pub fn run() {
             commands::product::update_product,
             commands::image::list_product_images,
             commands::image::import_product_images,
+            commands::image::delete_product_image,
             commands::image::reorder_product_images
         ])
         .run(tauri::generate_context!())

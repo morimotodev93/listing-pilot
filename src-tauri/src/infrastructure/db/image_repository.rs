@@ -83,3 +83,41 @@ pub fn create(connection: &Connection, image: &ProductImage) -> Result<(), AppEr
         Err(error) => Err(error.into()),
     }
 }
+
+pub fn get(
+    connection: &Connection,
+    product_id: &str,
+    image_id: &str,
+) -> Result<ProductImage, AppError> {
+    use rusqlite::OptionalExtension;
+    connection
+        .query_row(
+            &format!("SELECT {COLUMNS} FROM product_images WHERE product_id = ?1 AND id = ?2"),
+            params![product_id, image_id],
+            from_row,
+        )
+        .optional()?
+        .ok_or(AppError::ImageNotFound)
+}
+
+pub fn delete(connection: &Connection, product_id: &str, image_id: &str) -> Result<(), AppError> {
+    if connection.execute(
+        "DELETE FROM product_images WHERE product_id = ?1 AND id = ?2",
+        params![product_id, image_id],
+    )? != 1
+    {
+        return Err(AppError::ImageNotFound);
+    }
+    Ok(())
+}
+
+pub fn references_image_or_path(
+    connection: &Connection,
+    image: &ProductImage,
+) -> Result<bool, AppError> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM product_images WHERE id = ?1 OR relative_path = ?2)",
+        params![image.id, image.relative_path],
+        |row| row.get(0),
+    )?)
+}

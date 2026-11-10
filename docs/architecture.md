@@ -5,6 +5,23 @@
 
 ## React
 
+Phase 3.2の画像削除は `ProductImages` の確認dialog → `lib/api/images.ts` の
+`deleteProductImage({ productId, imageId })` → `delete_product_image` → `image_service::delete` の経路です。
+キャンセルはIPCを送信せず、確定中は既存の同期refガードで取り込み・並べ替え・再削除を防ぎます。
+成功後は一覧を再取得し、隔離保留は通常エラーとは別の警告で通知します。
+
+Rustは共通ImportPermit取得 → UUID・商品と画像の関連確認 → ファイル検査 → IMMEDIATE内の最新画像再取得 →
+商品IDと画像IDで1件削除 → 正規順序に従い残存画像を連番化 → COMMIT → ファイル隔離の順に処理します。
+ファイル検査・移動時にはDB Mutexを解放し、permitは隔離の終了まで保持します。
+COMMITの失敗だけはautocommit状態と画像ID・相対パスの双方の最新参照を再確認します。
+参照が残れば移動せずエラー、参照なしなら隔離、DB状態不明ならファイルを保持して再起動確認を案内します。
+
+Windowsの隔離は既存 `place_new` の `MoveFileExW(flags=0)` を再利用し、置換・別ボリュームコピーを禁止します。
+パスの全要素のリンク・reparse pointを拒否し、NotFoundだけを欠落として扱います。
+Windows以外の削除隔離は原子的な非置換移動が未実装のため保留を返します。取り込み経路は変更しません。
+起動時のOSロック下DB再照会と `originals/`・`.staging/` の検査は維持し、`quarantine/deleted/` を再処理しません。
+詳細は [ADR 0005](decisions/0005-safe-product-and-image-deletion.md) を参照してください。
+
 - `src/app/App.tsx`：アプリ全体の組み立てと基本レイアウト。
 - `src/features/connection/`：接続確認UIとローカルな表示状態。
 - `src/lib/api/`：UIが利用する非同期APIの窓口。`request.ts` がIPCと日本語エラー変換、`images.ts` が検証済み画像パスのURL変換を担当。
