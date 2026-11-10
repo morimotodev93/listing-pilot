@@ -14,6 +14,8 @@ pub enum AppError {
     ImageTooLarge,
     TooManyImages,
     DuplicateImage,
+    InvalidImageOrder,
+    StaleData,
     FileRead,
     FileSave,
     UnsafeMediaPath,

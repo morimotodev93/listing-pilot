@@ -11,6 +11,14 @@ use std::sync::{Arc, Mutex};
 pub struct Database(pub Arc<Mutex<Result<Connection, AppError>>>);
 
 impl Database {
+    pub fn with_mut<T>(
+        &self,
+        operation: impl FnOnce(&mut Connection) -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        let mut guard = self.0.lock().map_err(|_| AppError::DatabaseOperation)?;
+        operation(guard.as_mut().map_err(|error| error.clone())?)
+    }
+
     pub fn with<T>(
         &self,
         operation: impl FnOnce(&Connection) -> Result<T, AppError>,

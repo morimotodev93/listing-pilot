@@ -32,6 +32,23 @@ pub fn all(connection: &Connection) -> Result<Vec<ProductImage>, AppError> {
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+// Caller validates the complete image set and holds an IMMEDIATE transaction.
+pub fn update_order(
+    connection: &Connection,
+    product_id: &str,
+    ordered_ids: &[String],
+) -> Result<(), AppError> {
+    let mut statement = connection
+        .prepare("UPDATE product_images SET sort_order = ?1 WHERE product_id = ?2 AND id = ?3")?;
+    for (position, id) in ordered_ids.iter().enumerate() {
+        let position = i64::try_from(position).map_err(|_| AppError::InvalidImageOrder)?;
+        if statement.execute(params![position, product_id, id])? != 1 {
+            return Err(AppError::InvalidImageOrder);
+        }
+    }
+    Ok(())
+}
+
 pub fn has_hash(connection: &Connection, product_id: &str, sha256: &str) -> Result<bool, AppError> {
     Ok(connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM product_images WHERE product_id = ?1 AND sha256 = ?2)",

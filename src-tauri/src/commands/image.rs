@@ -14,6 +14,29 @@ use tauri_plugin_dialog::DialogExt;
 pub struct Media(pub Result<Arc<MediaStorage>, AppError>);
 
 #[tauri::command]
+pub async fn reorder_product_images(
+    database: State<'_, Database>,
+    media: State<'_, Media>,
+    product_id: String,
+    expected_image_ids: Vec<String>,
+    ordered_image_ids: Vec<String>,
+) -> Result<Vec<ImagePreview>, AppError> {
+    let database = database.inner().clone();
+    let media = media.0.as_ref().map_err(Clone::clone)?.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        image_service::reorder(
+            &database,
+            &media,
+            &product_id,
+            &expected_image_ids,
+            &ordered_image_ids,
+        )
+    })
+    .await
+    .map_err(|_| AppError::DatabaseOperation)?
+}
+
+#[tauri::command]
 pub async fn list_product_images(
     database: State<'_, Database>,
     media: State<'_, Media>,

@@ -50,7 +50,8 @@ pub fn run() {
             commands::product::create_product,
             commands::product::update_product,
             commands::image::list_product_images,
-            commands::image::import_product_images
+            commands::image::import_product_images,
+            commands::image::reorder_product_images
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

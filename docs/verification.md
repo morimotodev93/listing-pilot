@@ -1,5 +1,51 @@
 # 開発環境の検証結果
 
+## Phase 3.1 画像の表示順（2026-11-10 日本時間）
+
+開始時の作業ツリーはクリーン。Commit・Push・ブランチ切り替えは行っていない。
+前後移動、先頭のメイン画像表示、全ID順序を送る `reorder_product_images` を追加した。
+既存のImportPermit取得後、単一接続のIMMEDIATEトランザクションで検証・順序更新・保存結果取得・COMMITを行う。
+スキーマ、既存マイグレーション、依存関係、CSP、Capabilities、識別子、保存先、画像ファイル操作の方式は維持した。
+
+### 自動検証
+
+| コマンド | 結果 |
+| --- | --- |
+| `npm run build` | 成功、終了コード0。TypeScript検査とVite本番ビルド |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 成功、終了コード0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 成功、終了コード0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 成功、終了コード0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 成功、45件（既存39件＋追加6件）、失敗0件 |
+| `git diff --check` | 成功、終了コード0 |
+
+追加6テストは複数ケースを含み、4枚の変更、連番、先頭変更、再取得・接続再開後の維持、同一順序、重複（両配列）・不足・余分・不明・別商品ID、古い順序・追加取り込み後の古いスナップショット、商品不在、途中SQL失敗の全更新ロールバックを検証した。
+画像メタデータ・原本と管理画像のバイト列・SHA-256・商品更新日時の保持、ガード解放、DB Mutex取得前の競合拒否、追加取り込みの末尾配置、空・1枚・21枚、sort_order同値時の日時・ID順序も確認した。
+すべて専用一時DB・メディアを使い、ローカルtest-fixturesや本番LocalDataにはアクセスしていない。
+
+初回Viteビルドはサンドボックスの `spawn EPERM` で失敗。通常権限で同じ `npm run build` を再実行して成功し、コードや依存関係を変更して回避していない。
+
+### Windows実WebView2
+
+`npm run tauri dev -- --config .verification/phase31/config.json` を実行した。
+検証専用 `appDirectoriesOverride` を `.verification/phase31/data` に指定し、今回生成した8×8 PNG画像だけを利用した。
+実WebView2のCDPからReact UI・実IPCを操作し、Windows UI Automationでネイティブダイアログから画像を選択した。
+
+- 4枚の取り込みと画像表示、前後移動、先頭・末尾の境界ボタン無効化、メイン画像表示の切り替えを確認。
+- 画像一覧再取得・ページ再読み込み後に順序が維持されることを確認。
+- UI外の実IPCで順序を変更してから古いUIで移動を実行し、日本語のstale_data通知と最新一覧への復帰を確認。
+- 並べ替え後の追加取り込みで5枚目が末尾に入り、先行4枚の順序が保持されることを確認。
+- 開発アプリを終了・再起動し、5枚の順序と画像表示が維持されることを確認。
+- 成功した各検証区間でアプリのJavaScript例外・CSP違反を検出しなかった。
+
+証跡と検証スクリプトはGit対象外の `.verification/phase31/` に保持し、既存の検証成果物は変更していない。
+初回の検証スクリプトは商品一覧読込待機不足とPowerShell文字コードで失敗し、ハーネスを修正して再実行した。
+追加の二重送信計数用ハーネスは内部invoke関数の差し替えによる計数ができず、成功根拠には含めていない。実WebView2での保存中全ボタン無効化・二重送信件数の厳密な検証は未完了。同期refガードとRust側の競合拒否はコードレビュー・自動テストで確認した。
+ワークスペース内のWebView2プロファイルに対しVite watcherが `EBUSY` を出したが、アプリ動作の確認は完了した。
+検証後は起動した開発プロセスを停止した。
+
+今回 `npm run tauri build`、配布版CSP下でのPhase 3.1操作、インストーラー導入、別PC、電源断は未検証。
+今回追加した変更は配布設定や権限の変更を含まない。リリース前に配布版の操作も確認する。
+
 ## Phase 2 最終レビュー修正（2026-11-09 日本時間）
 
 初回実装の記録は次節に保持した。今回もmain / HEAD `a17ed5f` のまま、Commit・Push・ブランチ切り替えは行っていない。

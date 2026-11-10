@@ -40,6 +40,304 @@ struct Fixture {
     temp: Temp,
     product: Product,
 }
+
+fn image_ids(images: &[ProductImage]) -> Vec<String> {
+    images.iter().map(|image| image.id.clone()).collect()
+}
+
+impl Fixture {
+    fn ordered(&self) -> Vec<ProductImage> {
+        self.db
+            .with(|db| repository::list(db, &self.product.id))
+            .unwrap()
+    }
+
+    fn import_distinct(&self, start: u8, count: u8) {
+        let files: Vec<_> = (start..start + count)
+            .map(|color| {
+                let path = self.temp.0.join(format!("image-{color}.png"));
+                RgbImage::from_pixel(3, 2, image::Rgb([color, 120, 200]))
+                    .save(&path)
+                    .unwrap();
+                path
+            })
+            .collect();
+        assert!(
+            self.import(&files)
+                .items
+                .iter()
+                .all(|item| item.status == ImportStatus::Imported)
+        );
+    }
+
+    fn reorder(
+        &self,
+        expected: &[String],
+        ordered: &[String],
+    ) -> Result<Vec<ProductImage>, AppError> {
+        image_service::reorder(&self.db, &self.media, &self.product.id, expected, ordered)
+            .map(|images| images.into_iter().map(|preview| preview.image).collect())
+    }
+}
+
+#[test]
+fn reorder_four_images_preserves_metadata_bytes_product_and_restart_order() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 4);
+    let before = fixture.ordered();
+    let originals: Vec<_> = before
+        .iter()
+        .map(|image| fs::read(fixture.media.image_path(image).unwrap()).unwrap())
+        .collect();
+    let expected = image_ids(&before);
+    let ordered = vec![
+        expected[3].clone(),
+        expected[0].clone(),
+        expected[2].clone(),
+        expected[1].clone(),
+    ];
+    let saved = fixture.reorder(&expected, &ordered).unwrap();
+    assert_eq!(image_ids(&saved), ordered);
+    assert_eq!(
+        saved
+            .iter()
+            .map(|image| image.sort_order)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+    assert_eq!(fixture.ordered(), saved);
+    assert_eq!(fixture.reorder(&ordered, &ordered).unwrap(), saved);
+    fixture
+        .db
+        .with(|db| {
+            assert_eq!(
+                product_service::get(db, &fixture.product.id)?,
+                fixture.product
+            );
+            Ok(())
+        })
+        .unwrap();
+    for (image, bytes) in before.iter().zip(originals) {
+        let after = saved.iter().find(|after| after.id == image.id).unwrap();
+        let mut unchanged = after.clone();
+        unchanged.sort_order = image.sort_order;
+        assert_eq!(&unchanged, image);
+        assert_eq!(
+            fs::read(fixture.media.image_path(after).unwrap()).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            fs::read(fixture.temp.0.join(&image.original_filename)).unwrap(),
+            bytes
+        );
+        assert_eq!(after.sha256, format!("{:x}", Sha256::digest(&bytes)));
+    }
+    let Fixture {
+        media,
+        db,
+        temp,
+        product,
+    } = fixture;
+    drop(db);
+    drop(media);
+    let reopened = connection::open(&temp.0.join("test.sqlite3")).unwrap();
+    let media =
+        image_service::initialize_after_preflight(&reopened, &temp.0.join("media")).unwrap();
+    assert_eq!(repository::list(&reopened, &product.id).unwrap(), saved);
+    assert!(saved.iter().all(|image| media.preview(image).is_some()));
+    drop(media);
+    drop(reopened);
+}
+
+#[test]
+fn reorder_rejects_invalid_sets_duplicates_and_stale_snapshots_without_writes() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 4);
+    let before = fixture.ordered();
+    let expected = image_ids(&before);
+    let other = fixture
+        .db
+        .with(|db| product_service::create(db, input("other-order")))
+        .unwrap();
+    let source = fixture.temp.0.join("image-0.png");
+    image_service::import_files(&fixture.db, &fixture.media, &other.id, &[source]).unwrap();
+    let other_before = fixture
+        .db
+        .with(|db| repository::list(db, &other.id))
+        .unwrap();
+    let mut duplicate = expected.clone();
+    duplicate[1] = duplicate[0].clone();
+    let mut extra = expected.clone();
+    extra.push(Uuid::new_v4().to_string());
+    let mut foreign = expected.clone();
+    foreign[1] = other_before[0].id.clone();
+    let mut unknown = expected.clone();
+    unknown[1] = Uuid::new_v4().to_string();
+    for invalid in [
+        duplicate.clone(),
+        expected[..3].to_vec(),
+        extra,
+        foreign,
+        unknown,
+        vec![],
+    ] {
+        assert_eq!(
+            fixture.reorder(&expected, &invalid),
+            Err(AppError::InvalidImageOrder)
+        );
+        assert_eq!(fixture.ordered(), before);
+    }
+    assert_eq!(
+        fixture.reorder(&duplicate, &expected),
+        Err(AppError::InvalidImageOrder)
+    );
+    let mut stale = expected.clone();
+    stale.reverse();
+    for snapshot in [stale, expected[..3].to_vec(), vec![]] {
+        assert_eq!(
+            fixture.reorder(&snapshot, &expected),
+            Err(AppError::StaleData)
+        );
+        assert_eq!(fixture.ordered(), before);
+    }
+    assert!(matches!(
+        image_service::reorder(
+            &fixture.db,
+            &fixture.media,
+            &Uuid::new_v4().to_string(),
+            &[],
+            &[]
+        ),
+        Err(AppError::ProductNotFound)
+    ));
+    assert_eq!(
+        fixture
+            .db
+            .with(|db| repository::list(db, &other.id))
+            .unwrap(),
+        other_before
+    );
+    // A prior successful write also invalidates the original UI snapshot.
+    let mut ordered = expected.clone();
+    ordered.swap(0, 1);
+    let saved = fixture.reorder(&expected, &ordered).unwrap();
+    assert_eq!(
+        fixture.reorder(&expected, &expected),
+        Err(AppError::StaleData)
+    );
+    assert_eq!(fixture.ordered(), saved);
+}
+
+#[test]
+fn reorder_rolls_back_partial_sql_failure_and_releases_guard() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 4);
+    let before = fixture.ordered();
+    let expected = image_ids(&before);
+    fixture.db.with(|db| {
+        // The second UPDATE fails, after the first has changed a row.
+        db.execute_batch("CREATE TRIGGER fail_order BEFORE UPDATE OF sort_order ON product_images WHEN NEW.sort_order = 1 BEGIN SELECT RAISE(FAIL, 'injected reorder failure'); END;")?;
+        Ok(())
+    }).unwrap();
+    let mut ordered = expected.clone();
+    ordered.reverse();
+    assert_eq!(
+        fixture.reorder(&expected, &ordered),
+        Err(AppError::DatabaseOperation)
+    );
+    assert_eq!(fixture.ordered(), before);
+    fixture
+        .db
+        .with(|db| {
+            db.execute_batch("DROP TRIGGER fail_order")?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        image_ids(&fixture.reorder(&expected, &ordered).unwrap()),
+        ordered
+    );
+}
+
+#[test]
+fn reorder_and_import_share_nonblocking_guard_before_database_access() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 4);
+    let before = fixture.ordered();
+    let expected = image_ids(&before);
+    let permit = fixture.media.begin_import().unwrap();
+    {
+        // A busy operation must return before trying to lock the already-held DB.
+        let _db_guard = fixture.db.0.lock().unwrap();
+        assert_eq!(
+            fixture.reorder(&expected, &expected),
+            Err(AppError::MediaBusy)
+        );
+        assert!(matches!(
+            image_service::import_files(&fixture.db, &fixture.media, &fixture.product.id, &[]),
+            Err(AppError::MediaBusy)
+        ));
+    }
+    drop(permit);
+    assert_eq!(fixture.reorder(&expected, &expected).unwrap(), before);
+    fixture.import_distinct(4, 1);
+    let after = fixture.ordered();
+    assert_eq!(&after[..4], &before);
+    assert_eq!(after[4].sort_order, 4);
+    assert_eq!(
+        fixture.reorder(&expected, &expected),
+        Err(AppError::StaleData)
+    );
+}
+
+#[test]
+fn reorder_empty_single_and_more_than_twenty_images() {
+    let fixture = Fixture::new();
+    assert_eq!(fixture.reorder(&[], &[]).unwrap(), vec![]);
+    fixture.import_distinct(0, 1);
+    let single = fixture.ordered();
+    let ids = image_ids(&single);
+    assert_eq!(fixture.reorder(&ids, &ids).unwrap(), single);
+    fixture.import_distinct(1, 20);
+    let expected = image_ids(&fixture.ordered());
+    let mut ordered = expected.clone();
+    ordered.reverse();
+    let saved = fixture.reorder(&expected, &ordered).unwrap();
+    assert_eq!(image_ids(&saved), ordered);
+    assert_eq!(saved.len(), 21);
+    assert!(
+        saved
+            .iter()
+            .enumerate()
+            .all(|(index, image)| image.sort_order == index as i64)
+    );
+}
+
+#[test]
+fn reorder_uses_created_at_and_id_to_break_sort_order_ties() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(0, 4);
+    fixture
+        .db
+        .with(|db| {
+            db.execute(
+                "UPDATE product_images SET sort_order = 9, created_at = '2026-11-10T00:00:00Z'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let before = fixture.ordered();
+    let expected = image_ids(&before);
+    let mut sorted = expected.clone();
+    sorted.sort();
+    assert_eq!(expected, sorted);
+    sorted.reverse();
+    assert_eq!(
+        image_ids(&fixture.reorder(&expected, &sorted).unwrap()),
+        sorted
+    );
+}
 fn input(sku: &str) -> ProductInput {
     ProductInput {
         sku: sku.into(),

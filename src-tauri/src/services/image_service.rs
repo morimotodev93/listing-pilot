@@ -9,7 +9,10 @@ use crate::{
     },
 };
 use chrono::{SecondsFormat, Utc};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 use uuid::Uuid;
 
 pub fn initialize(
@@ -47,6 +50,51 @@ pub fn list(
         product_repository::get(connection, product_id)?;
         repository::list(connection, product_id)
     })?;
+    Ok(images
+        .into_iter()
+        .map(|image| ImagePreview {
+            preview_path: media.preview(&image),
+            image,
+        })
+        .collect())
+}
+
+pub fn reorder(
+    database: &Database,
+    media: &MediaStorage,
+    product_id: &str,
+    expected_ids: &[String],
+    ordered_ids: &[String],
+) -> Result<Vec<ImagePreview>, AppError> {
+    // Shared with import (including its dialog) and reconciliation; never wait
+    // for a media operation while holding the database mutex.
+    let _permit = media.begin_import()?;
+    let images = database.with_mut(|connection| {
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        product_repository::get(&transaction, product_id)?;
+        let current = repository::list(&transaction, product_id)?;
+        let expected_set: HashSet<_> = expected_ids.iter().collect();
+        let ordered_set: HashSet<_> = ordered_ids.iter().collect();
+        if expected_set.len() != expected_ids.len() || ordered_set.len() != ordered_ids.len() {
+            return Err(AppError::InvalidImageOrder);
+        }
+        if !current
+            .iter()
+            .map(|image| &image.id)
+            .eq(expected_ids.iter())
+        {
+            return Err(AppError::StaleData);
+        }
+        if ordered_set != expected_set {
+            return Err(AppError::InvalidImageOrder);
+        }
+        repository::update_order(&transaction, product_id, ordered_ids)?;
+        let saved = repository::list(&transaction, product_id)?;
+        transaction.commit()?;
+        Ok(saved)
+    })?;
+    // Preview validation performs filesystem access after releasing the DB mutex.
     Ok(images
         .into_iter()
         .map(|image| ImagePreview {

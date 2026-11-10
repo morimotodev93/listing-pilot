@@ -11,6 +11,12 @@ export type ProductImage = {
   preview_url: string | null;
 };
 
+export type ReorderProductImagesInput = {
+  productId: string;
+  expectedImageIds: string[];
+  orderedImageIds: string[];
+};
+
 export type ImportItem = {
   filename: string;
   status: "imported" | "duplicate" | "failed";

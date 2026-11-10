@@ -1,4 +1,4 @@
-# 商品データモデル（Phase 2）
+# 商品データモデル（Phase 3.1）
 
 ## products
 
@@ -39,6 +39,12 @@ DDLの正本は、ユーザー作成の `src-tauri/migrations/0002_create_produc
 | sha256 | TEXT | 長さ64のCHECK。Rustが小文字16進数で生成 |
 | sort_order | INTEGER | 非負。商品内の最大値+1（初回0）をINSERT時に決定 |
 | created_at | TEXT | NOT NULL。Rust生成UTC RFC3339日時 |
+
+Phase 3.1の並べ替えは既存 `sort_order` のみを単一IMMEDIATEトランザクションで0始まりの連番へ更新します。
+一覧の正規順序は `ORDER BY sort_order, created_at, id`、その先頭をメイン画像とします。専用フラグ・列・マイグレーションは追加しません。
+操作前の全ID順序との一致を確認し、変更後に不足・余分・重複・別商品のIDを受け付けません。
+画像がない商品の空配列同士と、同じ順序への更新は安全に成功します。総画像数を20枚に制限せず、新規取り込みは引き続き最大 `sort_order` + 1へ追加します。
+既存のSHA-256・相対パス・画像バイト列・その他メタデータと `products.updated_at` は保持します。
 
 `UNIQUE(product_id, sha256)` により商品内の同一内容を拒否し、別商品への同じ画像は許可します。
 `idx_product_images_product_order` は商品ID、表示順、日時、IDの順で一覧を取得するために使います。

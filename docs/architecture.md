@@ -81,6 +81,22 @@ ProductList → ProductDetail / ProductImages → lib/api/images.ts
 DB初期化・事前確認に失敗した場合は画像ディレクトリを作成・整理しません。ロック後の再取得に失敗した場合も隔離せずエラーを返します（ロックファイルや必要なディレクトリは作成され得ます）。画像初期化だけが失敗した場合も商品管理は利用可能です。
 取り込み中はプロセス内のpermitで二重操作と整合性検査を拒否します。OSファイルロックは他プロセスの取り込み・隔離を防ぎ、終了・異常終了時に解放されます。
 
+### 画像表示順（Phase 3.1）
+
+`ProductImages` → `lib/api/images.ts` → `reorder_product_images` → `image_service::reorder` → `image_repository::update_order` の経路で更新します。
+IPC引数は `productId`、`expectedImageIds`（操作前の全順序）、`orderedImageIds`（変更後の全順序）です。
+既存一覧と同じ `ImagePreview` を返し、API層が検証済みプレビューパスをURLへ変換します。
+
+`spawn_blocking` 内で既存の `begin_import()` / `ImportPermit` を共通の画像変更ガードとして取得し、その後DBへアクセスします。
+OSロックの方式は維持します。単一接続の `Database::with_mut()` 内でIMMEDIATEトランザクションを開始し、商品存在・重複ID・現在順序との完全一致・変更後のID集合を検証します。
+`invalid_image_order` と `stale_data` を区別し、不正入力・SQLエラーでは全更新をロールバックします。
+保存結果の一覧はトランザクション内で読み、COMMIT成功後に返します。プレビュー用ファイル確認はDB Mutex解放後です。
+
+UIは画像UUIDで対象を特定し、保存成功後にのみ順序と先頭の「メイン画像」表示を更新します。
+同期的なrefガードで二重送信を防ぎ、保存中は取り込み・再読み込み・移動・詳細からの遷移を無効化します。
+失敗時は日本語エラーを保持して最新一覧を再取得し、再取得失敗中は移動を停止します。
+画像ファイル・メタデータ・商品更新日時・スキーマは変更しません。
+
 Windowsの正式配置には `MoveFileExW`（flags=0）を使用し、配置先の存在確認と配置を一つのOS操作で行います。
 既存ファイルの置換・別ボリュームへのコピーを許可せず、ステージングからの同一ボリューム移動を維持します。
 事前の存在確認を削除したため、確認時のI/Oエラーを「存在しない」と扱うこともありません。失敗時のstagingは従来のDrop処理で整理します。
