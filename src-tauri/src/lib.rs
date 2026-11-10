@@ -21,24 +21,17 @@ pub fn run() {
                 .path()
                 .app_local_data_dir()
                 .map_err(|_| error::AppError::DatabaseInitialization);
-            let database = directory
+            let dataset = directory
                 .as_ref()
                 .map_err(Clone::clone)
-                .and_then(|directory| {
-                    infrastructure::db::connection::open(&directory.join("listing-pilot.sqlite3"))
-                });
-            // Never touch media when opening/migrating the DB failed. Reconciliation
-            // finishes before Commands can import, under the process-wide media lock.
-            let media = directory
-                .as_ref()
-                .map_err(Clone::clone)
-                .and_then(|directory| {
-                    services::image_service::initialize(&database, &directory.join("media"))
-                })
-                .map(Arc::new);
-            if let Err(error) = &media {
-                eprintln!("Media initialization failed: {error:?}");
-            }
+                .and_then(|directory| services::startup_service::initialize(directory));
+            let (database, media) = match dataset {
+                Ok((database, media)) => (Ok(database), Ok(Arc::new(media))),
+                Err(error) => {
+                    eprintln!("Dataset initialization failed: {error:?}");
+                    (Err(error.clone()), Err(error))
+                }
+            };
             app.manage(commands::image::Media(media));
             app.manage(infrastructure::db::Database(Arc::new(Mutex::new(database))));
             Ok(())

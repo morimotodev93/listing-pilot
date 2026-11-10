@@ -1,5 +1,110 @@
 # 開発環境の検証結果
 
+## Phase 3.5 監査に基づく品質改善（2026-11-10 日本時間）
+
+開始は `main / b70c86e`、作業ツリーはクリーン、ローカル `origin/main` との差分0。
+指摘を現行コード・失敗する再現テストで確認し、M-1/M-4/M-2/L-9と関連するL-8を修正した。
+指摘ごとの採否・理由・残存リスクは [監査対応記録](qa-hardening-phase35.md) を参照。
+本番LocalDataにはアクセスせず、既存の検証資料・fixtureも変更していない。
+新設 `.verification/phase35/` とUUID付き一時DB・mediaのみを使用した。Commit・Push・ブランチ切り替えは行っていない。
+
+### 自動検証
+
+| コマンド | 最終結果 |
+| --- | --- |
+| `npm run build` | 終了コード0、TypeScript・Vite成功 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了コード0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了コード0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了コード0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了コード0、86 passed / 0 failed / 0 ignored。main・doc-testは各0件 |
+| `npm run tauri build` | 終了コード0、通常設定のWindows Release・MSI・NSIS生成 |
+| `git diff --check` | 終了コード0 |
+
+既存71件は削除・無効化せず、更新APIの新しい必須引数をテストへ反映した。
+追加15件には別プロセス試験用の子テスト1件を含む。通常実行ではその子テストは何も作らず終了し、親テストが実別プロセスとして呼び出す。
+最終Rust結果は `.verification/phase35/final-rust-tests.log`。
+
+修正前は古いフォームの更新拒否、originals直下の通常ファイル、Windows拡張子大小文字差の再現テスト3件が失敗。
+修正後は同じ条件で成功した。条件付きSQLの直接競合、商品・日時保持、SKU重複、商品削除スナップショット、
+時計逆行、通常/平坦/入れ子ディレクトリ、junction、共有拒否、回収先衝突・途中失敗・再起動を追加確認した。
+回収先衝突は本番と同じ移動処理に固定名を注入し、上書き禁止と全バイト列保持を確認した。
+並べ替えの実COMMIT失敗はdeferred FK違反で再現し、順序の全ロールバックとファイル保持を確認した。
+実際のCOMMIT成功後だけエラーを返す障害は未再現。
+
+Windowsの実別プロセスがOSロックを保持中、もう一方のstartup serviceが `media_busy` で接続公開を拒否し、
+商品登録/編集/削除へDB操作を通さないこと、DBバイト列が変わらないことを検証した。
+通常終了と子プロセス強制終了の両方で、次の起動が成功し、既存商品・画像参照・SHA-256を保持した。
+これは実アプリの任意の書き込み瞬間や電源断を強制した試験ではない。
+
+初回Viteはサンドボックスの `spawn EPERM` で失敗し、同じコマンドを通常権限で再実行して成功。
+初回Clippyのテストモジュール配置エラーは末尾へ移動して解消し、その後のfmt/check/clippy/testを再実行した。
+依存関係・lockfile・既存マイグレーション・CSP・Capabilities・識別子は変更していない。
+
+### Windows実WebView2：開発版と専用Release
+
+開発版は `npm run tauri dev -- --config .verification/phase35/dev-config.json`。
+`appDirectoriesOverride` で `.verification/phase35/data` へ隔離し、起動後も実IPCの
+`plugin:path|resolve_directory`（AppLocalData）で一致を確認してから操作した。
+実React UI・Rust IPC・ネイティブファイル選択を使用し、モックは使っていない。
+試験スクリプトとJSON・スクリーンショットは同フォルダーの `smoke.mjs`、`*-result.json`、`*.png` に保持する。
+
+| シナリオ | 実測結果 |
+| --- | --- |
+| 商品登録・通常編集 | フォーム入力で登録・編集成功、保存後一覧に反映 |
+| 古いフォーム | 編集中に実IPCで別更新後、フォーム保存が競合案内を表示。入力した商品名・メモを保持し、最新DB商品と日時は変化なし |
+| 二重送信 | 同一イベントループ内の `requestSubmit()` 2回に対し、実IPCのfetchを計測して `update_product` は1回 |
+| 画像取り込み・表示 | 今回生成した32×24 PNG 2枚をネイティブダイアログで選択。管理バイト列・SHA-256が選択元と一致、実画像表示成功 |
+| 並べ替え・画像削除 | 実UIで順序変更、画像削除確認のキャンセル保持、確定削除、残存画像の表示を確認 |
+| 商品削除 | キャンセル保持、確認後に商品更新した場合の拒否、最新内容での再確認・確定削除に成功 |
+| 二重起動 | 開発版と専用Releaseでそれぞれ実アプリ2つを起動。2つ目の商品登録/編集/削除・画像取り込み/並べ替え/削除はすべて `media_busy`。UIに再起動案内 |
+| 起動時回収 | 停止中に未参照PNG、originals直下の通常ファイル、未完了stagingを作成。再起動で3件を回収し、それぞれのハッシュ一致 |
+| 大小文字差 | 同時に登録画像の拡張子を `.PNG` に変更。小文字DBパスで引き続き表示でき、再起動で隔離されずDB・SHA-256保持 |
+| SQLite検査 | 専用DBの `integrity_check = ok`、`foreign_key_check = 0行`、参照画像ファイル・ハッシュ一致 |
+| バックアップ/復元 | 全アプリ停止中にDB・mediaをコピーし一覧/全SHA-256一致。別領域へ復元しSQLite検査後、専用Releaseで商品・画像・順序を表示。通常終了・再起動後も一致 |
+| 実行時エラー | 成功した各観測区間でJS例外・コンソールエラー・CSP違反なし。専用ReleaseのHTML応答で本番CSPとscriptハッシュを確認し、unsafe-inline/unsafe-evalなし |
+| Release診断 | 二重起動する専用Releaseを標準エラーのリダイレクト付きで起動し `Dataset initialization failed: MediaBusy` を取得。通常起動の永続ログはない |
+
+最初の二重起動試験は同じWebViewプロファイルに異なるデバッグポート引数を渡したため、
+WebView2が `0x8007139F` でウィンドウ作成を拒否した。ブラウザー引数を揃えた再試験で2つの実ウィンドウと上記API拒否を確認した。
+ローカルUIスクリプトには計測対象の読み取り専用プロパティと複数検証商品の扱いに誤りがあり、
+修正して成功結果を取得した。アプリ側の回避修正は行っていない。
+開発版のwatcherがEBWebViewファイルに `EBUSY` を記録したが、上記成功区間の実IPC・画面動作に影響はなかった。
+これらはアプリのデータ保護テストの失敗と区別する。
+
+### Windows Release生成物
+
+通常設定の `npm run tauri build` と、保存先だけを変える次の専用Releaseビルドが成功した。
+
+```powershell
+npm run tauri build -- --no-bundle --config .verification/phase35/portable-config.json
+```
+
+専用設定は `app.appDirectoriesOverride: "./data"` のみ。専用Releaseは
+`.verification/phase35/restored-app/listing-pilot.exe`、保存先は隣の `data/`。
+本番CSP・アプリコード・識別子は通常Releaseと同じ。専用ビルドは2分29秒、SHA-256は
+`06FA4EB6A0F1132C396374561ED7489E3DDD99D801060E0BF8EBEDBD4334A2D4`。
+
+| 通常設定の生成物 | サイズ（bytes） |
+| --- | ---: |
+| `src-tauri/target/release/listing-pilot.exe` | 7,207,936 |
+| `src-tauri/target/release/bundle/msi/Listing Pilot_0.1.0_x64_en-US.msi` | 3,612,672 |
+| `src-tauri/target/release/bundle/nsis/Listing Pilot_0.1.0_x64-setup.exe` | 2,597,399 |
+
+通常EXEのSHA-256は `7E28777DB9DDD309849B830CC52B70134F4EAB2ADCBAB29BB94E64F4E80D4AAC`。
+通常EXEは実行せず、専用ビルド後のtargetへ通常EXEを戻してハッシュを照合した。
+全生成物のハッシュは `.verification/phase35/build-artifacts.json`、ビルドログは
+`release-build.log` / `isolated-release-build.log`。既存識別子末尾 `.app` に関するmacOS向け警告は継続。
+MSI/NSISは生成のみで、導入・アンインストール・上書き更新・署名・別PC試験は行っていない。
+
+### 残る制約
+
+symlink実作成はWindowsの権限不足（WinError 1314）でできず、junction/reparse試験と区別する。
+実ACL拒否は未実施（共有拒否は実施）。大小文字区別を有効にしたWindowsディレクトリ、別ファイルシステム、
+同一ユーザーの別プログラムによる検査直後のパス差し替え、電源断・実ディスク故障は未検証。
+旧版と新版の混在起動では旧版のDB書き込みを制御できないため、旧版を完全終了して使用する。
+UIの自動検証スクリプトはローカル資料であり、CIの恒久的なフロントエンドテスト基盤は追加していない。
+追加調査は上記の確認範囲に限定し、未解決条件を [監査対応記録](qa-hardening-phase35.md) に分類した。
+
 ## Phase 3.4 統合検証・リリース品質確認（2026-11-10 日本時間）
 
 開始時は `main` / HEAD `d8dacf2`、直前は `fbd1e0c`、作業ツリーはクリーン。

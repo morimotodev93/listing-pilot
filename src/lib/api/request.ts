@@ -20,7 +20,7 @@ const messages: Record<string, string> = {
   file_read: "画像ファイルを読み取れませんでした。アクセス権やファイルの状態を確認してください。",
   file_save: "画像を保存できませんでした。空き容量や保存先のアクセス権を確認してください。",
   unsafe_media_path: "安全性を確認できないファイルや保存先のため、画像の処理を中止しました。",
-  media_busy: "別の画像処理または別ウィンドウが画像保存先を使用中です。処理の完了または別アプリの終了後にお試しください。",
+  media_busy: "別の処理または別のListing Pilotが保存先を使用中です。処理の完了を待つか、別のアプリを終了してから、このアプリを再起動してください。",
   media_initialization: "画像の保存先を初期化できませんでした。アクセス権を確認して再起動してください。",
 };
 
@@ -29,8 +29,16 @@ export function errorMessage(error: unknown): string {
   return messages[code] ?? "処理に失敗しました。アプリを再起動してお試しください。";
 }
 
+export class RequestError extends Error {
+  readonly code: string;
+  constructor(error: unknown) {
+    super(errorMessage(error));
+    this.code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+  }
+}
+
 export async function request<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) throw new Error("商品管理はデスクトップアプリで利用できます。");
   try { return await invoke<T>(command, args); }
-  catch (error: unknown) { throw new Error(errorMessage(error)); }
+  catch (error: unknown) { throw new RequestError(error); }
 }

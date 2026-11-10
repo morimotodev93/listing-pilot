@@ -4,7 +4,8 @@ import type { Product, ProductInput } from "../../features/products/types";
 export const listProducts = () => request<Product[]>("list_products");
 export const getProduct = (id: string) => request<Product>("get_product", { id });
 export const createProduct = (input: ProductInput) => request<Product>("create_product", { input });
-export const updateProduct = (id: string, input: ProductInput) => request<Product>("update_product", { id, input });
+export type UpdateProductRequest = { id: string; input: ProductInput; expectedUpdatedAt: string };
+export const updateProduct = (input: UpdateProductRequest) => request<Product>("update_product", input);
 
 export type ProductDeletePreview = {
   product_id: string;

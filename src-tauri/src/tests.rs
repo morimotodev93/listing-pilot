@@ -64,7 +64,7 @@ fn update_product() {
     update.brand = Some("ブランド".into());
     update.description_note = Some("メモ".into());
     update.price_yen = Some(0);
-    let updated = service::update(&db, &original.id, update).unwrap();
+    let updated = service::update(&db, &original.id, update, &original.updated_at).unwrap();
     assert_eq!(updated.id, original.id);
     assert_eq!(updated.created_at, original.created_at);
     assert_eq!(updated.sku, "new");
@@ -73,6 +73,56 @@ fn update_product() {
     assert_eq!(updated.brand.as_deref(), Some("ブランド"));
     assert_eq!(updated.description_note.as_deref(), Some("メモ"));
     assert_eq!(service::get(&db, &original.id).unwrap(), updated);
+}
+#[test]
+fn stale_form_never_overwrites_newer_product() {
+    let db = database();
+    let original = service::create(&db, input("original")).unwrap();
+    let latest = service::update(&db, &original.id, input("latest"), &original.updated_at).unwrap();
+    assert_eq!(
+        service::update(&db, &original.id, input("stale form"), &original.updated_at),
+        Err(AppError::StaleData)
+    );
+    assert_eq!(service::get(&db, &original.id).unwrap(), latest);
+    assert_eq!(
+        service::update(&db, &original.id, input("stale"), ""),
+        Err(AppError::StaleData)
+    );
+    assert_eq!(service::get(&db, &original.id).unwrap(), latest);
+}
+
+#[test]
+fn conditional_update_guards_against_change_after_service_read() {
+    let db = database();
+    let original = service::create(&db, input("original")).unwrap();
+    let mut stale = original.clone();
+    stale.name = "stale".into();
+    let latest = service::update(&db, &original.id, input("latest"), &original.updated_at).unwrap();
+    assert_eq!(
+        crate::infrastructure::db::product_repository::update(&db, &stale, &original.updated_at),
+        Err(AppError::StaleData)
+    );
+    assert_eq!(service::get(&db, &original.id).unwrap(), latest);
+    db.execute("DELETE FROM products", []).unwrap();
+    assert_eq!(
+        crate::infrastructure::db::product_repository::update(&db, &stale, &original.updated_at),
+        Err(AppError::ProductNotFound)
+    );
+}
+
+#[test]
+fn update_token_advances_even_when_previous_timestamp_is_in_future() {
+    let db = database();
+    let original = service::create(&db, input("clock")).unwrap();
+    let future = "2099-01-01T00:00:00.000000000Z";
+    db.execute("UPDATE products SET updated_at = ?1", [future])
+        .unwrap();
+    let updated = service::update(&db, &original.id, input("clock"), future).unwrap();
+    assert_eq!(updated.updated_at, "2099-01-01T00:00:00.000000001Z");
+    assert_eq!(
+        service::update(&db, &original.id, input("stale"), future),
+        Err(AppError::StaleData)
+    );
 }
 #[test]
 fn duplicate_sku_is_rejected_on_create_and_update() {
@@ -84,7 +134,7 @@ fn duplicate_sku_is_rejected_on_create_and_update() {
     );
     let other = service::create(&db, input("sku")).unwrap(); // case-sensitive
     assert_eq!(
-        service::update(&db, &other.id, input("SKU")),
+        service::update(&db, &other.id, input("SKU"), &other.updated_at),
         Err(AppError::DuplicateSku)
     );
     assert_eq!(service::get(&db, &other.id).unwrap(), other);
@@ -120,7 +170,7 @@ fn invalid_prices_are_rejected() {
 #[test]
 fn update_missing_product() {
     assert_eq!(
-        service::update(&database(), "missing", input("SKU")),
+        service::update(&database(), "missing", input("SKU"), "old"),
         Err(AppError::ProductNotFound)
     );
 }

@@ -734,6 +734,279 @@ fn crash_leftovers_and_orphans_are_quarantined_while_registered_files_remain() {
 }
 
 #[test]
+fn recovery_accepts_safe_unexpected_file_at_originals_root() {
+    let f = Fixture::new();
+    f.import_distinct(0, 1);
+    let images = f.ordered();
+    let stray = f.temp.0.join("media/originals/notes.txt");
+    fs::write(&stray, b"retain notes").unwrap();
+    assert_eq!(f.media.reconcile(&images), Ok(1));
+    assert!(!stray.exists());
+    assert!(f.media.preview(&images[0]).is_some());
+}
+
+#[test]
+#[cfg(windows)]
+fn recovery_preserves_registered_image_with_uppercase_disk_extension() {
+    let f = Fixture::new();
+    f.import_distinct(0, 1);
+    let images = f.ordered();
+    let registered = f.media.image_path(&images[0]).unwrap();
+    let renamed = registered.with_extension("PNG");
+    fs::rename(&registered, &renamed).unwrap();
+    assert!(
+        registered.exists(),
+        "test requires case-insensitive directory"
+    );
+    assert_eq!(f.media.reconcile(&images), Ok(0));
+    assert!(f.media.preview(&images[0]).is_some());
+    assert_eq!(
+        format!("{:x}", Sha256::digest(fs::read(registered).unwrap())),
+        images[0].sha256
+    );
+    assert_eq!(f.count("quarantine"), 0);
+}
+
+#[test]
+fn product_edit_conflict_keeps_delete_snapshot_and_latest_product_consistent() {
+    let f = Fixture::new();
+    f.import_distinct(0, 1);
+    let old_delete = product_delete_input(&f);
+    let updated =
+        f.db.with(|db| {
+            product_service::update(db, &f.product.id, input("edited"), &f.product.updated_at)
+        })
+        .unwrap();
+    assert_eq!(delete_product(&f, &old_delete), Err(AppError::StaleData));
+    let latest_delete = product_delete_input(&f);
+    assert_eq!(
+        f.db.with(|db| product_service::update(
+            db,
+            &f.product.id,
+            input("stale"),
+            &f.product.updated_at
+        )),
+        Err(AppError::StaleData)
+    );
+    assert_eq!(
+        f.db.with(|db| product_service::get(db, &f.product.id))
+            .unwrap(),
+        updated
+    );
+    assert!(delete_product(&f, &latest_delete).unwrap().deleted);
+}
+
+#[test]
+fn recovery_rejects_nested_directory_before_moving_any_files() {
+    let f = Fixture::new();
+    let keep = f.temp.0.join("media/.staging/keep.tmp");
+    fs::write(&keep, b"keep").unwrap();
+    fs::create_dir_all(f.temp.0.join("media/originals/unexpected/nested")).unwrap();
+    assert_eq!(f.media.reconcile(&[]), Err(AppError::UnsafeMediaPath));
+    assert_eq!(fs::read(keep).unwrap(), b"keep");
+    assert_eq!(f.count("quarantine"), 0);
+}
+
+#[test]
+fn recovery_accepts_unexpected_flat_directory_without_deleting_contents() {
+    let f = Fixture::new();
+    let stray = f.temp.0.join("media/originals/unexpected");
+    fs::create_dir(&stray).unwrap();
+    fs::write(stray.join("notes.txt"), b"safe content").unwrap();
+    assert_eq!(f.media.reconcile(&[]), Ok(1));
+    assert!(stray.is_dir());
+    let recovered = fs::read_dir(f.temp.0.join("media/quarantine"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(fs::read(recovered).unwrap(), b"safe content");
+}
+
+#[cfg(windows)]
+#[test]
+fn recovery_rejects_junctions_before_any_move() {
+    let f = Fixture::new();
+    let target = f.temp.0.join("isolated-target");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("keep.txt"), b"keep target").unwrap();
+    let stray = f.temp.0.join("media/.staging/keep.tmp");
+    fs::write(&stray, b"keep staged").unwrap();
+    let link = fs::canonicalize(f.temp.0.join("media/originals"))
+        .unwrap()
+        .join("linked");
+    let result = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&link)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let result = f.media.reconcile(&[]);
+    fs::remove_dir(&link).unwrap();
+    assert_eq!(result, Err(AppError::UnsafeMediaPath));
+    assert_eq!(fs::read(stray).unwrap(), b"keep staged");
+    assert_eq!(fs::read(target.join("keep.txt")).unwrap(), b"keep target");
+    assert_eq!(f.count("quarantine"), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn recovery_rejects_unreadable_reference_before_moving_orphans() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let f = Fixture::new();
+    f.import_distinct(0, 1);
+    let images = f.ordered();
+    let path = f.media.image_path(&images[0]).unwrap();
+    let stray = f.temp.0.join("media/.staging/keep.tmp");
+    fs::write(&stray, b"keep").unwrap();
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+    assert_eq!(f.media.reconcile(&images), Err(AppError::FileRead));
+    assert!(stray.exists());
+    assert_eq!(f.count("quarantine"), 0);
+    drop(held);
+    assert_eq!(f.media.reconcile(&images), Ok(1));
+}
+
+#[test]
+fn startup_failure_preserves_database_and_does_not_publish_writable_connection() {
+    let temp = Temp::new();
+    let path = temp.0.join("listing-pilot.sqlite3");
+    fs::write(&path, b"corrupt DB retained").unwrap();
+    assert!(matches!(
+        crate::services::startup_service::initialize(&temp.0),
+        Err(AppError::DatabaseInitialization)
+    ));
+    assert_eq!(fs::read(&path).unwrap(), b"corrupt DB retained");
+    assert!(!temp.0.join("media").exists());
+}
+
+// Invoked by dataset_lock_survives_two_processes_and_abnormal_exit. A normally
+// run test has no environment variable and does not create any app data.
+#[test]
+fn dataset_lock_child() {
+    use std::io::{Read, Write};
+    let Some(directory) = std::env::var_os("LISTING_PILOT_TEST_DATASET") else {
+        return;
+    };
+    let (_db, _media) =
+        crate::services::startup_service::initialize(&PathBuf::from(directory)).unwrap();
+    println!("DATASET_LOCK_READY");
+    std::io::stdout().flush().unwrap();
+    let mut release = [0u8];
+    std::io::stdin().read_exact(&mut release).unwrap();
+}
+
+#[test]
+fn dataset_lock_survives_two_processes_and_abnormal_exit() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    let temp = Temp::new();
+    let product;
+    let images;
+    {
+        let (db, media) = crate::services::startup_service::initialize(&temp.0).unwrap();
+        product = product_service::create(&db, input("two-process")).unwrap();
+        let db = Database(Arc::new(Mutex::new(Ok(db))));
+        let source = temp.0.join("source.png");
+        RgbImage::new(2, 2).save(&source).unwrap();
+        image_service::import_files(&db, &media, &product.id, &[source]).unwrap();
+        images = db.with(repository::all).unwrap();
+    }
+    for terminate in [false, true] {
+        let before = fs::read(temp.0.join("listing-pilot.sqlite3")).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "image_tests::dataset_lock_child", "--nocapture"])
+            .env("LISTING_PILOT_TEST_DATASET", &temp.0)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            assert!(
+                stdout.read_line(&mut line).unwrap() > 0,
+                "child exited before acquiring lock"
+            );
+            if line.contains("DATASET_LOCK_READY") {
+                break;
+            }
+            line.clear();
+        }
+        let blocked = crate::services::startup_service::initialize(&temp.0);
+        assert!(matches!(blocked, Err(AppError::MediaBusy)));
+        assert!(matches!(
+            MediaStorage::open(&temp.0.join("media")),
+            Err(AppError::MediaBusy)
+        ));
+        let db = Database(Arc::new(Mutex::new(Err(AppError::MediaBusy))));
+        assert_eq!(
+            db.with(|db| product_service::create(db, input("blocked"))),
+            Err(AppError::MediaBusy)
+        );
+        assert_eq!(
+            db.with(|db| product_service::update(
+                db,
+                &product.id,
+                input("blocked"),
+                &product.updated_at
+            )),
+            Err(AppError::MediaBusy)
+        );
+        assert_eq!(
+            db.with_mut(|db| {
+                db.execute("DELETE FROM products", [])?;
+                Ok(())
+            }),
+            Err(AppError::MediaBusy)
+        );
+        assert_eq!(
+            fs::read(temp.0.join("listing-pilot.sqlite3")).unwrap(),
+            before
+        );
+        if terminate {
+            child.kill().unwrap();
+        } else {
+            child.stdin.take().unwrap().write_all(b"x").unwrap();
+        }
+        let status = child.wait().unwrap();
+        assert_eq!(status.success(), !terminate);
+        let (db, media) = crate::services::startup_service::initialize(&temp.0).unwrap();
+        assert_eq!(product_service::get(&db, &product.id).unwrap(), product);
+        assert_eq!(repository::all(&db).unwrap(), images);
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(fs::read(media.image_path(&images[0]).unwrap()).unwrap())
+            ),
+            images[0].sha256
+        );
+    }
+}
+
+#[test]
+fn reorder_commit_failure_rolls_back_order_without_moving_files() {
+    let f = Fixture::new();
+    f.import_distinct(0, 2);
+    let images = f.ordered();
+    let ids = image_ids(&images);
+    f.db.with(|db| {
+        db.execute_batch("CREATE TABLE deferred_failure (id TEXT REFERENCES products(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_order_commit AFTER UPDATE OF sort_order ON product_images BEGIN INSERT INTO deferred_failure VALUES ('missing'); END;")?;
+        Ok(())
+    }).unwrap();
+    assert!(f.reorder(&ids, &[ids[1].clone(), ids[0].clone()]).is_err());
+    assert_eq!(f.ordered(), images);
+    assert_eq!(f.count("quarantine"), 0);
+    assert!(images.iter().all(|image| f.media.preview(image).is_some()));
+}
+
+#[test]
 fn media_process_lock_and_import_permit_prevent_racing_recovery() {
     let fixture = Fixture::new();
     assert!(matches!(

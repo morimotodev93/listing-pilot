@@ -16,6 +16,7 @@ use std::{
 };
 use uuid::Uuid;
 
+#[cfg(test)]
 pub fn initialize(
     database: &Result<rusqlite::Connection, AppError>,
     root: &Path,
@@ -27,6 +28,7 @@ pub fn initialize(
     initialize_after_preflight(connection, root)
 }
 
+#[cfg(test)]
 pub(crate) fn initialize_after_preflight(
     connection: &rusqlite::Connection,
     root: &Path,

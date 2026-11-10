@@ -438,12 +438,26 @@ impl MediaStorage {
     // Only called before publishing the storage to Commands. ImportPermit and the
     // process lock also protect direct/test callers from racing reconciliation.
     pub fn reconcile(&self, images: &[ProductImage]) -> Result<usize, AppError> {
+        self.reconcile_to(images, |_| format!("{}.recovered", Uuid::new_v4()))
+    }
+
+    fn reconcile_to(
+        &self,
+        images: &[ProductImage],
+        destination_name: impl Fn(usize) -> String,
+    ) -> Result<usize, AppError> {
         let _permit = self.begin_import()?;
         // Validate the entire reference set before moving anything.
-        let referenced = images
-            .iter()
-            .map(|image| self.image_path(image))
-            .collect::<Result<HashSet<_>, _>>()?;
+        let mut referenced = HashSet::new();
+        for image in images {
+            if self.deletion_file_exists(image)? {
+                // Resolve actual filesystem spelling, including Windows case rules.
+                // Missing files remain DB references; all other failures abort.
+                referenced.insert(
+                    fs::canonicalize(self.image_path(image)?).map_err(|_| AppError::FileRead)?,
+                );
+            }
+        }
         let mut candidates = vec![];
         let staging = self.root.join(".staging");
         directory(&staging, false)?;
@@ -456,23 +470,84 @@ impl MediaStorage {
         directory(&originals, false)?;
         for entry in fs::read_dir(originals).map_err(|_| AppError::FileRead)? {
             let product_dir = entry.map_err(|_| AppError::FileRead)?.path();
+            let metadata = fs::symlink_metadata(&product_dir).map_err(|_| AppError::FileRead)?;
+            if is_link(&metadata) {
+                return Err(AppError::UnsafeMediaPath);
+            }
+            if metadata.is_file() {
+                safe_regular_file(&product_dir)?;
+                eprintln!("Recovery found a regular file at originals root; scheduling quarantine");
+                candidates.push(product_dir);
+                continue;
+            }
             directory(&product_dir, false)?;
             for entry in fs::read_dir(product_dir).map_err(|_| AppError::FileRead)? {
                 let path = entry.map_err(|_| AppError::FileRead)?.path();
                 safe_regular_file(&path)?;
-                if !referenced.contains(&path) {
+                let resolved = fs::canonicalize(&path).map_err(|_| AppError::FileRead)?;
+                if !referenced.contains(&resolved) {
                     candidates.push(path);
                 }
             }
         }
         let quarantine = self.root.join("quarantine");
         directory(&quarantine, false)?;
-        for path in &candidates {
+        for (index, path) in candidates.iter().enumerate() {
             safe_regular_file(path)?;
-            // UUID destination prevents clobbering previous recovery artifacts.
-            let destination = quarantine.join(format!("{}.recovered", Uuid::new_v4()));
-            fs::rename(path, destination).map_err(|_| AppError::FileSave)?;
+            directory(&quarantine, false)?;
+            let destination = quarantine.join(destination_name(index));
+            // UUIDs avoid ordinary collisions; the OS guarantees no replacement.
+            #[cfg(windows)]
+            place_new(path, &destination).map_err(|_| AppError::FileSave)?;
+            #[cfg(not(windows))]
+            {
+                place_new(path, &destination).map_err(|_| AppError::FileSave)?;
+                fs::remove_file(path).map_err(|_| AppError::FileSave)?;
+            }
         }
         Ok(candidates.len())
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    #[test]
+    fn recovery_collision_and_partial_failure_preserve_all_bytes_then_resume() {
+        for collision_at in [0, 1] {
+            let root =
+                std::env::temp_dir().join(format!("listing-pilot-recovery-{}", Uuid::new_v4()));
+            {
+                let media = MediaStorage::open(&root).unwrap();
+                fs::write(root.join(".staging/a.tmp"), b"first").unwrap();
+                fs::write(root.join(".staging/b.tmp"), b"second").unwrap();
+                let collision = root.join(format!("quarantine/{collision_at}.recovered"));
+                fs::write(&collision, b"existing artifact").unwrap();
+                assert_eq!(
+                    media.reconcile_to(&[], |i| format!("{i}.recovered")),
+                    Err(AppError::FileSave)
+                );
+                assert_eq!(fs::read(&collision).unwrap(), b"existing artifact");
+                assert_eq!(
+                    fs::read_dir(root.join(".staging")).unwrap().count(),
+                    2 - collision_at
+                );
+                // Remove only the collision created by this test, then simulate restart.
+                fs::remove_file(collision).unwrap();
+            }
+            {
+                let media = MediaStorage::open(&root).unwrap();
+                assert_eq!(media.reconcile(&[]), Ok(2 - collision_at));
+                assert_eq!(media.reconcile(&[]), Ok(0));
+                let mut bytes: Vec<_> = fs::read_dir(root.join("quarantine"))
+                    .unwrap()
+                    .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+                    .collect();
+                bytes.sort();
+                assert_eq!(bytes, vec![b"first".to_vec(), b"second".to_vec()]);
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }

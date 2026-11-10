@@ -1,5 +1,6 @@
 import { useRef, useState, type FormEvent } from "react";
 import { createProduct, updateProduct } from "../../../lib/api/products";
+import { RequestError } from "../../../lib/api/request";
 import type { Product } from "../types";
 
 type Props = { product: Product | null; onSaved: () => void; onCancel: () => void };
@@ -12,6 +13,7 @@ export function ProductForm({ product, onSaved, onCancel }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const submitting = useRef(false);
+  const [expectedUpdatedAt] = useState(product?.updated_at ?? "");
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting.current) return;
@@ -24,9 +26,13 @@ export function ProductForm({ product, onSaved, onCancel }: Props) {
     submitting.current = true; setSaving(true);
     try {
       const input = { sku, name, brand: brand || null, price_yen: priceText ? Number(priceText) : null, description_note: note || null };
-      if (product) await updateProduct(product.id, input); else await createProduct(input);
+      if (product) await updateProduct({ id: product.id, input, expectedUpdatedAt }); else await createProduct(input);
       onSaved();
-    } catch (error: unknown) { setError(error instanceof Error ? error.message : "保存できませんでした。"); }
+    } catch (error: unknown) {
+      setError(error instanceof RequestError && error.code === "stale_data"
+        ? "この商品は別の操作で更新されています。現在の編集内容は保存されませんでした。最新の商品情報を確認してください。"
+        : error instanceof Error ? error.message : "保存できませんでした。");
+    }
     finally { submitting.current = false; setSaving(false); }
   }
   return <section className="product-form panel" aria-labelledby="form-heading">

@@ -51,13 +51,18 @@ pub fn create(connection: &Connection, product: &Product) -> Result<(), AppError
     Ok(())
 }
 
-pub fn update(connection: &Connection, product: &Product) -> Result<(), AppError> {
+pub fn update(
+    connection: &Connection,
+    product: &Product,
+    expected_updated_at: &str,
+) -> Result<(), AppError> {
     let changed = connection.execute(
-        "UPDATE products SET sku = ?2, name = ?3, brand = ?4, price_yen = ?5, description_note = ?6, updated_at = ?7 WHERE id = ?1",
-        params![product.id, product.sku, product.name, product.brand, product.price_yen, product.description_note, product.updated_at],
+        "UPDATE products SET sku = ?2, name = ?3, brand = ?4, price_yen = ?5, description_note = ?6, updated_at = ?7 WHERE id = ?1 AND updated_at = ?8",
+        params![product.id, product.sku, product.name, product.brand, product.price_yen, product.description_note, product.updated_at, expected_updated_at],
     )?;
     if changed == 0 {
-        return Err(AppError::ProductNotFound);
+        get(connection, &product.id)?;
+        return Err(AppError::StaleData);
     }
     Ok(())
 }

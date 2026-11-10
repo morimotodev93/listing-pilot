@@ -33,9 +33,10 @@ pub async fn update_product(
     state: State<'_, Database>,
     id: String,
     input: ProductInput,
+    expected_updated_at: String,
 ) -> Result<Product, AppError> {
     execute(state, move |connection| {
-        product_service::update(connection, &id, input)
+        product_service::update(connection, &id, input, &expected_updated_at)
     })
     .await
 }
