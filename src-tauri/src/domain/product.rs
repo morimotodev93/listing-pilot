@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 // JavaScript can represent integer yen exactly throughout this range.
 pub const MAX_PRICE_YEN: i64 = 9_007_199_254_740_991;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Product {
     pub id: String,
     pub sku: String,
@@ -23,6 +23,26 @@ pub struct ProductInput {
     pub brand: Option<String>,
     pub price_yen: Option<i64>,
     pub description_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductDeletePreview {
+    pub product_id: String,
+    pub name: String,
+    pub sku: String,
+    pub updated_at: String,
+    pub image_count: usize,
+    pub image_ids: Vec<String>,
+    pub product: Product,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteProductInput {
+    pub product_id: String,
+    pub expected_updated_at: String,
+    pub expected_image_ids: Vec<String>,
+    pub expected_product: Product,
 }
 
 impl ProductInput {

@@ -20,8 +20,8 @@ function ImageCard({ image, index, count, busy, onMove, onDelete }: CardProps) {
   </div>}<button type="button" className="secondary" disabled={busy} aria-label={`${index + 1}枚目の${image.original_filename}を削除`} onClick={() => onDelete(image)}>削除</button></li>;
 }
 
-type Props = { productId: string; onBusyChange: (busy: boolean) => void };
-export function ProductImages({ productId, onBusyChange }: Props) {
+type Props = { productId: string; onBusyChange: (busy: boolean) => void; disabled?: boolean; isBlocked?: () => boolean };
+export function ProductImages({ productId, onBusyChange, disabled = false, isBlocked }: Props) {
   const [images, setImages] = useState<ProductImage[]>([]);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -48,7 +48,7 @@ export function ProductImages({ productId, onBusyChange }: Props) {
   useEffect(() => { void refresh(); return () => { generation.current++; }; }, [refresh]);
 
   function askDelete(image: ProductImage) {
-    if (operation.current || loading || !orderReady || deleteTarget) return;
+    if (disabled || isBlocked?.() || operation.current || loading || !orderReady || deleteTarget) return;
     setDeleteTarget(image);
     confirmDialog.current?.showModal();
   }
@@ -58,7 +58,7 @@ export function ProductImages({ productId, onBusyChange }: Props) {
     setDeleteTarget(null);
   }
   async function deleteImage() {
-    if (operation.current || !deleteTarget) return;
+    if (disabled || isBlocked?.() || operation.current || !deleteTarget) return;
     operation.current = true; setDeleting(true); onBusyChange(true);
     setError(""); setReport(null); setDeleteReport(null);
     try {
@@ -72,7 +72,7 @@ export function ProductImages({ productId, onBusyChange }: Props) {
     } finally { operation.current = false; setDeleting(false); onBusyChange(false); }
   }
   async function importImages() {
-    if (operation.current || deleteTarget) return;
+    if (disabled || isBlocked?.() || operation.current || deleteTarget) return;
     setDeleteReport(null);
     operation.current = true; setImporting(true); onBusyChange(true); setError(""); setReport(null);
     try {
@@ -82,7 +82,7 @@ export function ProductImages({ productId, onBusyChange }: Props) {
     finally { operation.current = false; setImporting(false); onBusyChange(false); }
   }
   async function moveImage(id: string, direction: -1 | 1) {
-    if (operation.current || loading || !orderReady || deleteTarget) return;
+    if (disabled || isBlocked?.() || operation.current || loading || !orderReady || deleteTarget) return;
     setDeleteReport(null);
     const index = images.findIndex(image => image.id === id);
     const target = index + direction;
@@ -99,7 +99,7 @@ export function ProductImages({ productId, onBusyChange }: Props) {
     } finally { operation.current = false; setSaving(false); onBusyChange(false); }
   }
   const busy = loading || importing || saving || deleting;
-  const controlsBusy = busy || deleteTarget !== null;
+  const controlsBusy = disabled || busy || deleteTarget !== null;
   const imported = report?.items.filter(item => item.status === "imported").length ?? 0;
   const duplicates = report?.items.filter(item => item.status === "duplicate").length ?? 0;
   const failures = report?.items.filter(item => item.status === "failed").length ?? 0;

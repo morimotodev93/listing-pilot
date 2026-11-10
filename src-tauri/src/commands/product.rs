@@ -39,3 +39,31 @@ pub async fn update_product(
     })
     .await
 }
+
+#[tauri::command]
+pub async fn get_product_delete_preview(
+    database: State<'_, Database>,
+    product_id: String,
+) -> Result<crate::domain::product::ProductDeletePreview, AppError> {
+    let database = database.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::product_deletion_service::preview(&database, &product_id)
+    })
+    .await
+    .map_err(|_| AppError::DatabaseOperation)?
+}
+
+#[tauri::command]
+pub async fn delete_product(
+    database: State<'_, Database>,
+    media: State<'_, super::image::Media>,
+    input: crate::domain::product::DeleteProductInput,
+) -> Result<crate::domain::image::DeleteImageReport, AppError> {
+    let database = database.inner().clone();
+    let media = media.0.as_ref().map_err(Clone::clone)?.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::product_deletion_service::delete(&database, &media, &input)
+    })
+    .await
+    .map_err(|_| AppError::ProductDeletionUnknown)?
+}

@@ -16,6 +16,13 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Product> {
 
 const COLUMNS: &str = "id, sku, name, brand, price_yen, description_note, created_at, updated_at";
 
+pub fn delete(connection: &Connection, id: &str) -> Result<(), AppError> {
+    if connection.execute("DELETE FROM products WHERE id = ?1", [id])? != 1 {
+        return Err(AppError::StaleData);
+    }
+    Ok(())
+}
+
 pub fn list(connection: &Connection) -> Result<Vec<Product>, AppError> {
     let mut statement = connection.prepare(&format!(
         "SELECT {COLUMNS} FROM products ORDER BY updated_at DESC, id ASC"

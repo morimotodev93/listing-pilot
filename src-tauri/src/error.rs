@@ -17,6 +17,7 @@ pub enum AppError {
     InvalidImageOrder,
     ImageNotFound,
     ImageDeletionUnknown,
+    ProductDeletionUnknown,
     StaleData,
     FileRead,
     FileSave,

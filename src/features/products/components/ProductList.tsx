@@ -14,6 +14,7 @@ export function ProductList() {
   const [editing, setEditing] = useState(false);
   const [editError, setEditError] = useState("");
   const [notice, setNotice] = useState("");
+  const [warning, setWarning] = useState("");
   const editLock = useRef(false);
   async function edit(id: string, showDetail = false) {
     if (editLock.current) return;
@@ -28,11 +29,17 @@ export function ProductList() {
   if (editor) return <ProductForm key={editor.product?.id ?? "new"} product={editor.product} onCancel={() => setEditor(null)} onSaved={() => {
     setEditor(null); setDetail(null); setNotice("商品を保存しました。"); void refresh();
   }} />;
-  if (detail) return <ProductDetail product={detail} onBack={() => setDetail(null)} onEdit={() => setEditor({ product: detail })} />;
+  if (detail) return <ProductDetail key={detail.id} product={detail} onBack={() => setDetail(null)} onEdit={() => setEditor({ product: detail })}
+    onDeleted={report => {
+      setDetail(null); setNotice("商品を削除しました。");
+      setWarning(report.pending_quarantine_count ? `管理画像${report.pending_quarantine_count}枚の隔離が完了していません。ファイルは保持され、次回起動時に再確認されます。` : "");
+      void refresh();
+    }} />;
   return <section className="panel" aria-labelledby="products-heading" aria-busy={loading || editing}>
     <div className="section-heading"><div><h2 id="products-heading">商品管理</h2><p className="muted">登録した商品はこのPCに保存されます。</p></div>
       <button type="button" disabled={editing} onClick={() => { setEditor({ product: null }); setNotice(""); setEditError(""); }}>商品を登録</button></div>
     {notice && <p className="success" role="status">{notice}</p>}
+    {warning && <p className="warning" role="alert">{warning}</p>}
     {(error || editError) && <p className="error" role="alert">{error || editError}</p>}
     {loading ? <p role="status">商品を読み込んでいます…</p> : error ? null : products.length === 0 ?
       <div className="empty"><h3>商品はまだ登録されていません</h3><p>「商品を登録」から最初の商品を追加しましょう。</p></div> :

@@ -1467,3 +1467,526 @@ fn delete_finalization_rechecks_missing_and_unsafe_sources() {
         assert_eq!(report.missing_image_count, usize::from(!unsafe_source));
     }
 }
+
+// Phase 3.3: all fixtures below use dedicated temporary DB/media only.
+fn product_delete_input(fixture: &Fixture) -> crate::domain::product::DeleteProductInput {
+    let preview =
+        crate::services::product_deletion_service::preview(&fixture.db, &fixture.product.id)
+            .unwrap();
+    assert_eq!(preview.image_count, preview.image_ids.len());
+    assert_eq!(preview.image_ids, image_ids(&fixture.ordered()));
+    crate::domain::product::DeleteProductInput {
+        product_id: preview.product_id,
+        expected_updated_at: preview.updated_at,
+        expected_image_ids: preview.image_ids,
+        expected_product: preview.product,
+    }
+}
+fn delete_product(
+    f: &Fixture,
+    input: &crate::domain::product::DeleteProductInput,
+) -> Result<crate::domain::image::DeleteImageReport, AppError> {
+    crate::services::product_deletion_service::delete(&f.db, &f.media, input)
+}
+
+#[test]
+fn product_delete_zero_one_four_images_preserves_sources_other_product_and_restart() {
+    for count in [0, 1, 4] {
+        let f = Fixture::new();
+        f.import_distinct(0, count);
+        let before = f.ordered();
+        let other =
+            f.db.with(|db| product_service::create(db, input("other-product-delete")))
+                .unwrap();
+        if count > 0 {
+            assert_eq!(
+                image_service::import_files(
+                    &f.db,
+                    &f.media,
+                    &other.id,
+                    &[f.temp.0.join("image-0.png")]
+                )
+                .unwrap()
+                .items[0]
+                    .status,
+                ImportStatus::Imported
+            );
+        }
+        let other_images = f.db.with(|db| repository::list(db, &other.id)).unwrap();
+        let report = delete_product(&f, &product_delete_input(&f)).unwrap();
+        assert!(report.deleted);
+        assert_eq!(report.affected_image_count, count as usize);
+        assert_eq!(report.quarantined_image_count, count as usize);
+        assert_eq!(
+            report.missing_image_count + report.pending_quarantine_count,
+            0
+        );
+        assert!(f.ordered().is_empty());
+        assert_eq!(
+            f.db.with(|db| product_service::get(db, &f.product.id)),
+            Err(AppError::ProductNotFound)
+        );
+        for image in &before {
+            let bytes = fs::read(deleted_path(&f, image)).unwrap();
+            assert_eq!(
+                bytes,
+                fs::read(f.temp.0.join(&image.original_filename)).unwrap()
+            );
+            assert_eq!(format!("{:x}", Sha256::digest(&bytes)), image.sha256);
+        }
+        let Fixture {
+            media,
+            db,
+            temp,
+            product,
+        } = f;
+        drop(media);
+        drop(db);
+        let connection = connection::open(&temp.0.join("test.sqlite3")).unwrap();
+        // Fixture uses this exact path; a separate connection checks persistence.
+        assert_eq!(
+            product_service::get(&connection, &product.id),
+            Err(AppError::ProductNotFound)
+        );
+        assert_eq!(product_service::get(&connection, &other.id).unwrap(), other);
+        assert_eq!(
+            repository::list(&connection, &other.id).unwrap(),
+            other_images
+        );
+        let media = image_service::initialize(&Ok(connection), &temp.0.join("media")).unwrap();
+        for image in &before {
+            let path = temp
+                .0
+                .join("media/quarantine/deleted")
+                .join(&image.product_id)
+                .join(format!("{}.png", image.id));
+            assert!(path.is_file());
+        }
+        for image in &other_images {
+            assert!(media.preview(image).is_some());
+        }
+    }
+}
+
+#[test]
+fn product_delete_rejects_stale_timestamp_and_same_timestamp_product_changes() {
+    for column in ["updated_at", "name", "sku", "brand", "description_note"] {
+        let f = Fixture::new();
+        f.import_distinct(0, 2);
+        let expected = product_delete_input(&f);
+        f.db.with(|db| {
+            db.execute(
+                &format!("UPDATE products SET {column} = 'changed' WHERE id = ?1"),
+                [&f.product.id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(delete_product(&f, &expected), Err(AppError::StaleData));
+        assert_eq!(f.ordered().len(), 2);
+        assert!(
+            f.ordered()
+                .iter()
+                .all(|image| f.media.preview(image).is_some())
+        );
+    }
+}
+
+#[test]
+fn product_delete_rejects_added_removed_reordered_images() {
+    for mode in 0..3 {
+        let f = Fixture::new();
+        f.import_distinct(0, 3);
+        let expected = product_delete_input(&f);
+        match mode {
+            0 => f.import_distinct(5, 1),
+            1 => {
+                delete_image(&f, &f.ordered()[0]).unwrap();
+            }
+            _ => {
+                let mut reversed = expected.expected_image_ids.clone();
+                reversed.reverse();
+                f.reorder(&expected.expected_image_ids, &reversed).unwrap();
+            }
+        }
+        let before = f.ordered();
+        assert_eq!(delete_product(&f, &expected), Err(AppError::StaleData));
+        assert_eq!(f.ordered(), before);
+    }
+}
+
+#[test]
+fn product_delete_rejects_duplicate_foreign_invalid_and_missing_ids() {
+    for mode in 0..6 {
+        let f = Fixture::new();
+        f.import_distinct(0, 2);
+        let mut expected = product_delete_input(&f);
+        match mode {
+            0 => expected.expected_image_ids[1] = expected.expected_image_ids[0].clone(),
+            1 => {
+                let other =
+                    f.db.with(|db| product_service::create(db, input("foreign-delete")))
+                        .unwrap();
+                image_service::import_files(
+                    &f.db,
+                    &f.media,
+                    &other.id,
+                    &[f.temp.0.join("image-0.png")],
+                )
+                .unwrap();
+                expected.expected_image_ids[0] =
+                    f.db.with(|db| repository::list(db, &other.id)).unwrap()[0]
+                        .id
+                        .clone();
+            }
+            2 => expected.product_id = "invalid".into(),
+            3 => expected.expected_image_ids[0] = "invalid".into(),
+            4 => expected.product_id = Uuid::new_v4().to_string(),
+            _ => expected.expected_image_ids.clear(),
+        }
+        assert_eq!(delete_product(&f, &expected), Err(AppError::StaleData));
+        assert_eq!(f.ordered().len(), 2);
+    }
+}
+
+#[test]
+fn product_preview_not_found_is_read_only() {
+    let f = Fixture::new();
+    for id in ["invalid".to_string(), Uuid::new_v4().to_string()] {
+        assert!(matches!(
+            crate::services::product_deletion_service::preview(&f.db, &id),
+            Err(AppError::ProductNotFound)
+        ));
+    }
+    assert_eq!(f.count("quarantine"), 0);
+}
+
+#[test]
+fn product_delete_sql_image_partial_and_product_failures_rollback_every_record() {
+    for trigger in [
+        "BEFORE DELETE ON product_images WHEN OLD.sort_order = 1",
+        "BEFORE DELETE ON products",
+        "BEFORE DELETE ON products WHEN OLD.name IS NOT NULL",
+    ] {
+        let f = Fixture::new();
+        f.import_distinct(0, 4);
+        let expected = product_delete_input(&f);
+        let before = f.ordered();
+        f.db.with(|db| {
+            db.execute_batch(&format!(
+                "CREATE TRIGGER injected {trigger} BEGIN SELECT RAISE(ABORT, 'injected'); END"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            delete_product(&f, &expected),
+            Err(AppError::DatabaseOperation)
+        );
+        assert_eq!(f.ordered(), before);
+        assert_eq!(
+            f.db.with(|db| product_service::get(db, &f.product.id))
+                .unwrap(),
+            f.product
+        );
+        for image in &before {
+            assert!(f.media.preview(image).is_some());
+        }
+        assert_eq!(f.count("quarantine"), 0);
+    }
+}
+
+#[test]
+fn product_delete_commit_failure_rolls_back_and_preserves_files() {
+    let f = Fixture::new();
+    f.import_distinct(0, 3);
+    let expected = product_delete_input(&f);
+    let before = f.ordered();
+    f.db.with(|db| {
+        db.execute_batch("CREATE TABLE blocker (product_id TEXT REFERENCES products(id) DEFERRABLE INITIALLY DEFERRED)")?;
+        db.execute("INSERT INTO blocker VALUES (?1)", [&f.product.id])?; Ok(())
+    }).unwrap();
+    assert_eq!(
+        delete_product(&f, &expected),
+        Err(AppError::DatabaseOperation)
+    );
+    assert_eq!(f.ordered(), before);
+    for image in before {
+        assert!(f.media.preview(&image).is_some());
+    }
+}
+
+#[test]
+fn product_delete_commit_resolution_checks_product_all_ids_paths_and_unknown_state() {
+    let f = Fixture::new();
+    f.import_distinct(0, 3);
+    let before = f.ordered();
+    let resolve = || {
+        crate::services::product_deletion_service::resolve_commit(
+            &f.db,
+            &f.product.id,
+            &before,
+            Err(AppError::DatabaseOperation),
+        )
+    };
+    assert_eq!(resolve(), Err(AppError::DatabaseOperation));
+    f.db.with(|db| {
+        for image in &before {
+            repository::delete(db, &f.product.id, &image.id)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(resolve(), Err(AppError::ProductDeletionUnknown)); // partial state
+    f.db.with(|db| crate::infrastructure::db::product_repository::delete(db, &f.product.id))
+        .unwrap();
+    assert_eq!(resolve(), Ok(())); // simulated error after successful commit
+    let other =
+        f.db.with(|db| product_service::create(db, input("resolve-other")))
+            .unwrap();
+    for same_id in [false, true] {
+        let mut replacement = before[2].clone();
+        replacement.product_id = other.id.clone();
+        if same_id {
+            replacement.relative_path =
+                MediaStorage::relative_path(&other.id, &replacement.id, "png").unwrap();
+        } else {
+            replacement.id = Uuid::new_v4().to_string();
+        }
+        f.db.with(|db| repository::create(db, &replacement))
+            .unwrap();
+        assert_eq!(resolve(), Err(AppError::ProductDeletionUnknown));
+        f.db.with(|db| repository::delete(db, &other.id, &replacement.id))
+            .unwrap();
+    }
+    f.db.with(|db| {
+        db.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(resolve(), Err(AppError::ProductDeletionUnknown));
+    f.db.with(|db| {
+        db.execute_batch("ROLLBACK; DROP TABLE product_images")?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(resolve(), Err(AppError::ProductDeletionUnknown));
+    for image in before {
+        assert!(f.media.preview(&image).is_some());
+    }
+}
+
+#[test]
+fn product_delete_partial_quarantine_collision_and_missing_aggregate_and_restart_recover() {
+    let f = Fixture::new();
+    f.import_distinct(0, 4);
+    let expected = product_delete_input(&f);
+    let before = f.ordered();
+    let collision = deleted_path(&f, &before[1]);
+    fs::create_dir_all(collision.parent().unwrap()).unwrap();
+    fs::write(&collision, b"existing").unwrap();
+    fs::remove_file(f.media.image_path(&before[2]).unwrap()).unwrap();
+    let report = delete_product(&f, &expected).unwrap();
+    assert_eq!(
+        (
+            report.affected_image_count,
+            report.quarantined_image_count,
+            report.missing_image_count,
+            report.pending_quarantine_count
+        ),
+        (4, 2, 1, 1)
+    );
+    assert_eq!(fs::read(&collision).unwrap(), b"existing");
+    let retained = fs::read(f.media.image_path(&before[1]).unwrap()).unwrap();
+    let Fixture {
+        media, db, temp, ..
+    } = f;
+    drop(media);
+    drop(db);
+    let connection = connection::open(&temp.0.join("test.sqlite3")).unwrap();
+    let media = image_service::initialize(&Ok(connection), &temp.0.join("media")).unwrap();
+    assert_eq!(fs::read(collision).unwrap(), b"existing");
+    assert!(
+        fs::read_dir(temp.0.join("media/quarantine"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "recovered")
+                && fs::read(entry.path()).unwrap() == retained)
+    );
+    assert!(media.preview(&before[1]).is_none());
+}
+
+#[test]
+fn product_delete_all_missing_accepts_missing_product_directory() {
+    let f = Fixture::new();
+    f.import_distinct(0, 3);
+    let expected = product_delete_input(&f);
+    for image in f.ordered() {
+        fs::remove_file(f.media.image_path(&image).unwrap()).unwrap();
+    }
+    fs::remove_dir(f.temp.0.join("media/originals").join(&f.product.id)).unwrap();
+    let report = delete_product(&f, &expected).unwrap();
+    assert_eq!(
+        (
+            report.affected_image_count,
+            report.missing_image_count,
+            report.quarantined_image_count,
+            report.pending_quarantine_count
+        ),
+        (3, 3, 0, 0)
+    );
+}
+
+#[test]
+fn product_delete_unsafe_path_or_nonregular_file_aborts_all_before_db_change() {
+    for mode in 0..3 {
+        let f = Fixture::new();
+        f.import_distinct(0, 3);
+        let expected = product_delete_input(&f);
+        let before = f.ordered();
+        if mode == 0 {
+            f.db.with(|db| {
+                db.execute(
+                    "UPDATE product_images SET relative_path = '../escape.png' WHERE id = ?1",
+                    [&before[2].id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        } else if mode == 1 {
+            let path = f.media.image_path(&before[2]).unwrap();
+            fs::remove_file(&path).unwrap();
+            fs::create_dir(path).unwrap();
+        } else {
+            f.db.with(|db| {
+                db.execute(
+                    "UPDATE product_images SET mime_type = 'image/jpeg' WHERE id = ?1",
+                    [&before[2].id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        }
+        assert_eq!(
+            delete_product(&f, &expected),
+            Err(AppError::UnsafeMediaPath)
+        );
+        assert_eq!(f.ordered().len(), 3);
+        assert!(f.media.preview(&before[0]).is_some());
+        assert_eq!(f.count("quarantine"), 0);
+    }
+}
+
+#[test]
+fn product_delete_zero_and_multiple_images_share_import_reorder_delete_permit() {
+    for count in [0, 3] {
+        let f = Fixture::new();
+        f.import_distinct(0, count);
+        let expected = product_delete_input(&f);
+        let permit = f.media.begin_import().unwrap();
+        // Holding DB too proves a busy operation rejects before attempting the DB lock.
+        let lock = f.db.0.lock().unwrap();
+        assert_eq!(delete_product(&f, &expected), Err(AppError::MediaBusy));
+        assert!(matches!(
+            image_service::reorder(&f.db, &f.media, &f.product.id, &[], &[]),
+            Err(AppError::MediaBusy)
+        ));
+        assert!(matches!(
+            image_service::import_files(&f.db, &f.media, &f.product.id, &[]),
+            Err(AppError::MediaBusy)
+        ));
+        assert_eq!(
+            image_service::delete(&f.db, &f.media, &f.product.id, &Uuid::new_v4().to_string()),
+            Err(AppError::MediaBusy)
+        );
+        drop(lock);
+        drop(permit);
+        assert!(delete_product(&f, &expected).unwrap().deleted);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn product_delete_read_error_aborts_all_and_locked_move_continues_other_images() {
+    use std::os::windows::fs::OpenOptionsExt;
+    for share_mode in [0, 1] {
+        let f = Fixture::new();
+        f.import_distinct(0, 3);
+        let expected = product_delete_input(&f);
+        let before = f.ordered();
+        let path = f.media.image_path(&before[1]).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(share_mode)
+            .open(&path)
+            .unwrap();
+        if share_mode == 0 {
+            assert_eq!(delete_product(&f, &expected), Err(AppError::FileRead));
+            assert_eq!(f.ordered(), before);
+            assert_eq!(f.count("quarantine"), 0);
+        } else {
+            let report = delete_product(&f, &expected).unwrap();
+            assert_eq!(
+                (
+                    report.quarantined_image_count,
+                    report.pending_quarantine_count,
+                    report.missing_image_count
+                ),
+                (2, 1, 0)
+            );
+        }
+        drop(lock);
+        assert!(path.is_file());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn product_delete_rejects_source_reparse_point_and_retains_destination_reparse_point() {
+    for source in [true, false] {
+        let f = Fixture::new();
+        f.import_distinct(0, 3);
+        let expected = product_delete_input(&f);
+        let target = f.temp.0.join("junction-target");
+        fs::create_dir(&target).unwrap();
+        let link = if source {
+            let original = f.temp.0.join("media/originals").join(&f.product.id);
+            for image in f.ordered() {
+                let path = f.media.image_path(&image).unwrap();
+                fs::rename(&path, target.join(path.file_name().unwrap())).unwrap();
+            }
+            fs::remove_dir(&original).unwrap();
+            original
+        } else {
+            f.temp.0.join("media/quarantine/deleted")
+        };
+        let link = fs::canonicalize(link.parent().unwrap())
+            .unwrap()
+            .join(link.file_name().unwrap());
+        assert!(
+            std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(&link)
+                .arg(&target)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        if source {
+            assert_eq!(
+                delete_product(&f, &expected),
+                Err(AppError::UnsafeMediaPath)
+            );
+            assert_eq!(f.ordered().len(), 3);
+        } else {
+            let report = delete_product(&f, &expected).unwrap();
+            assert_eq!(report.pending_quarantine_count, 3);
+            assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+        }
+        fs::remove_dir(link).unwrap();
+    }
+}

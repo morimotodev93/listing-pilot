@@ -49,6 +49,8 @@ pub fn run() {
             commands::product::get_product,
             commands::product::create_product,
             commands::product::update_product,
+            commands::product::get_product_delete_preview,
+            commands::product::delete_product,
             commands::image::list_product_images,
             commands::image::import_product_images,
             commands::image::delete_product_image,

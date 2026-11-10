@@ -5,6 +5,19 @@
 
 ## React
 
+Phase 3.3の商品削除は `ProductDetail` → `lib/api/products.ts` → `commands/product.rs` →
+`services/product_deletion_service.rs` の経路です。プレビューと削除はblocking worker上で処理します。
+`get_product_delete_preview({ productId })` は読取トランザクションで商品全体と正規順序の全画像IDを返します。
+`delete_product({ input })` のinputは `productId`、`expectedUpdatedAt`、`expectedImageIds`、`expectedProduct` です。
+商品全体の一致と重複のないID順序を事前・IMMEDIATE内で検証し、全画像メタデータも事前検査時と照合します。
+permit → DBスナップショット → Mutex解放・全ファイル検査 → IMMEDIATE再検証 → 全画像DELETE → 商品DELETE →
+参照なし確認 → COMMIT → Mutex解放・全画像隔離、の順を守ります。画像0枚でも共通permitを取得します。
+COMMITエラー後はautocommitと全参照を再照会し、曖昧な状態では隔離も成功返却もしません。
+各画像の隔離失敗は保留に集計し、残りを継続します。削除済みDBレコードは復活させません。
+Reactは最新プレビューの確認dialogを表示し、確定時だけ削除APIを呼びます。失敗時は確認を閉じ、自動再試行しません。
+同期refと `ProductImages.onBusyChange` により操作を制御し、削除確認・処理中は編集・遷移・画像操作を停止します。
+成功後の一覧再取得・保留警告は `ProductList` が担当します。
+
 Phase 3.2の画像削除は `ProductImages` の確認dialog → `lib/api/images.ts` の
 `deleteProductImage({ productId, imageId })` → `delete_product_image` → `image_service::delete` の経路です。
 キャンセルはIPCを送信せず、確定中は既存の同期refガードで取り込み・並べ替え・再削除を防ぎます。
@@ -39,7 +52,7 @@ importしません。将来Webデモが必要になった際は、この窓口�
 - `src-tauri/src/main.rs`：デスクトップのエントリーポイント。
 - `src-tauri/capabilities/default.json`：メインウィンドウの基本権限。追加プラグイン権限なし。
 
-接続確認用の `greet` は引数を持たず `String` を返します。商品用の4つのCommandを追加し、
+接続確認用の `greet` は引数を持たず `String` を返します。商品用の6つのCommandを公開し、
 Commandsは薄い入口にし、検証・エラー変換とRust内部モジュールへの委譲を担います。
 
 ## Rust
@@ -57,7 +70,7 @@ ProductList / ProductForm → lib/api/products.ts → Tauri invoke
 ```
 
 - `features/products/types.ts`：IPCで受け渡す商品型。`hooks/useProducts.ts`：一覧取得と再読み込み。古い応答の反映を防止。
-- `commands/product.rs`：4つのIPC入口。`spawn_blocking` でDB処理をワーカースレッドへ委譲。
+- `commands/product.rs`：6つのIPC入口。`spawn_blocking` でDB処理をワーカースレッドへ委譲。
 - `services/product_service.rs`：入力検証、UUID生成、UTC日時、商品登録・更新の調整。
 - `domain/product.rs`：商品型、入力型、必須項目・価格の検証と空白正規化。
 - `infrastructure/db/connection.rs`：保存先作成・接続・foreign_keys・5秒busy timeout。

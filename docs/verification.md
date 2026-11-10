@@ -1,5 +1,85 @@
 # 開発環境の検証結果
 
+## Phase 3.3 安全な商品削除（2026-11-10 日本時間）
+
+開始時HEADは `a95f846`、作業ツリーはクリーン。Commit・Push・ブランチ切り替えは行っていない。
+商品削除プレビュー・確認dialog・商品と全画像の原子的DB削除・COMMIT後の複数画像隔離を追加した。
+既存マイグレーション・依存関係・lockfile・識別子・保存先・CSP・Capabilities・Asset Protocolは変更していない。
+
+### 自動検証
+
+| コマンド | 最終結果 |
+| --- | --- |
+| `npm run build` | 終了コード0。TypeScript検査・Vite本番ビルド成功 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了コード0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了コード0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了コード0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了コード0、71 passed / 0 failed / 0 ignored（既存57＋追加14） |
+| `npm run tauri build` | 終了コード0。Windows releaseビルド、MSI（3.44 MiB）・NSIS（2.47 MiB）生成成功 |
+| `git diff --check` | 終了コード0 |
+
+追加14テストには複数ケースを含み、次の障害経路も検証した。
+
+- 0・1・4枚の商品削除、商品と画像のDB削除、他商品・他画像の保持、再接続・再起動後の状態。
+- 正常隔離の元バイト列・SHA-256・取り込み元画像の保持、deleted領域の非再処理。
+- 更新日時不一致、同一日時のままの商品名・SKU・ブランド・メモ変更、画像追加・削除・並べ替え後の古い確認拒否。
+- 重複・別商品・不正UUID・不在ID・不足画像IDの拒否。プレビュー不在時の `product_not_found`。
+- 画像削除途中と商品DELETEのSQLエラーをtriggerで注入し、全DBレコードのロールバック・ファイル非移動を確認。
+- 遅延外部キーによる実COMMIT失敗後のロールバック確認。解決ヘルパーへエラーを注入し、
+  全参照なし、商品残存、一部参照残存、別商品への画像ID・パス参照、非autocommit、DB照会不能を確認。
+  一部参照の不整合・照会不能は `product_deletion_unknown`、全ロールバックはDB操作エラーとなる。
+- 複数画像で隔離先衝突・欠落・正常隔離を混在させ、4＝2＋1＋1の集計と衝突先の非上書きを確認。
+- 全画像・商品ディレクトリ欠落の許容、不正パス・MIME/拡張子不一致・通常ファイルでない対象の全体拒否。
+- Windows共有モード0の読み取りエラーは欠落にせず全体拒否。読み取り可・移動不可なら1枚保留・残り2枚隔離。
+- Windows junctionの元画像パス拒否、隔離先junctionへの移動拒否と元管理画像の保持。
+- 画像0・3枚で共通permitとDB Mutexを保持し、商品削除・取り込み・並べ替え・画像削除がDB待ちせずbusyとなること。
+- 隔離保留画像が次回起動で `.recovered` に回収され、既存隔離ファイルは保持されること。
+
+全自動テストは専用一時DB・メディアを使用し、本番LocalDataと既存test-fixturesは使用していない。
+初回Viteはサンドボックスの子プロセス起動制限による `spawn EPERM`。通常権限で同じビルドを再実行して成功した。
+新規テストの初回コンパイルではImagePreviewのPartialEqを要求するassertを修正し、再起動テストのDBパスを
+Fixtureと同じ `test.sqlite3` に揃えた。既存テスト・Domainの画像比較仕様は変更していない。
+
+### Windows実WebView2
+
+`npm run tauri dev -- --config .verification/phase33/config.json` を使用し、公式 `appDirectoriesOverride` で
+保存先を新設 `.verification/phase33/data` だけに限定した。実Rust IPC、React UI、ネイティブ画像選択を使用。
+既存Phase 3.2のサンプル画像は読み取り・コピーだけ行い、既存の成果物は変更していない。
+
+| シナリオ | 観測結果 |
+| --- | --- |
+| 商品登録・画像取り込み | 専用対象商品へ4枚、別商品へ1枚を取り込み表示 |
+| 最新内容の確認・キャンセル | 商品名・SKU・4枚表示。キャンセル後も2商品を保持 |
+| 初期フォーカス | プレビュー取得後のbusy解除前にdialogを開く問題を修正し、キャンセルへのフォーカスを確認 |
+| 古い確認の拒否 | 確認中に実商品更新APIで名前・更新日時を変更。確定は拒否され、dialogが閉じて再確認を案内。商品は保持 |
+| 最新内容での削除 | 再取得した確認に変更後の商品名を表示。確定後に一覧へ戻り、対象商品が消える |
+| 隔離先衝突 | 専用衝突ファイルを1枚分置き、保留1枚の警告を実UIで確認。正常3枚は隔離し、衝突先は不変 |
+| バイト列の保持 | 管理画像4枚のSHA-256・選択元バイト一致を確認。保留1枚は元管理パスに保持 |
+| 画像0枚の商品 | 新規専用商品をUIの確認から削除し、一覧から消えることを確認 |
+| 正常終了・再起動 | 対象商品・画像0枚の商品が再表示されない。別商品と画像APIの結果は削除前と一致 |
+| 保留画像の回収 | 起動ログ `Quarantined 1 incomplete or orphaned media files`、回収画像SHA-256一致、正常隔離3枚は保持 |
+| 実行時エラー | prepare/other/check/restartの各観測区間でJavaScript例外・CSP違反0件 |
+
+証跡はGit対象外の `.verification/phase33/` に、スクリプト・結果JSON・商品/画像情報・
+`confirm.png`・`deleted.png`・専用データとして保持した。アプリは検証後に正常終了した。
+Vite watcherは専用WebView2プロファイルのCookies等で `EBUSY` を報告したが、上記操作・再起動検証は成功した。
+最後のCOMMIT結果解決の不整合判定追加は、全71テストと型・静的チェックで再検証した。
+
+### 変更と残る制約
+
+追加：`services/product_deletion_service.rs`。
+変更：Rustの `commands/product.rs`、`domain/product.rs`、`error.rs`、`image_tests.rs`、
+`infrastructure/db/product_repository.rs`、`lib.rs`、`services/mod.rs`。
+React/APIの `ProductDetail.tsx`、`ProductImages.tsx`、`ProductList.tsx`、`lib/api/products.ts`、`lib/api/request.ts`。
+文書のREADME、architecture、data-model、ADR 0005、本書。
+
+COMMIT成功後にI/Oエラーが返る実ストレージ故障は再現せず、結果解決分岐への注入で確認した。
+削除中ボタン無効化・同期refガードはコードレビュー、Rustの競合拒否は自動テストで確認した。
+厳密な二重クリックのIPC回数計測、配布版の実操作、インストーラー導入、別PC、電源断・実ディスク故障は未検証。
+配布ビルドは通常設定で生成し、実行・インストールしていない。既存識別子の末尾 `.app` に関するmacOS向け警告は継続する。
+親ディレクトリを検査直後に外部プログラムが差し替える攻撃への制限、Windows以外の削除隔離を保留とする制限は維持する。
+画像の完全消去、アプリ内復元、複数商品一括削除は対象外。
+
 ## Phase 3.2 画像1枚の安全な削除（2026-11-10 日本時間）
 
 開始時はmain / HEAD `46bd236`、作業ツリーはクリーン。Commit・Push・ブランチ切り替えは行っていない。
