@@ -1,5 +1,172 @@
 # 開発環境の検証結果
 
+## Phase 3.4 統合検証・リリース品質確認（2026-11-10 日本時間）
+
+開始時は `main` / HEAD `d8dacf2`、直前は `fbd1e0c`、作業ツリーはクリーン。
+既存71件の回帰とWindows実WebView2の操作・データ保護を検証した。
+アプリ側の修正を必要とする不具合は見つからず、変更はREADME、本書、新規 `backup-and-restore.md` のみ。
+ソース、依存・lockfile、マイグレーション、アイコン、識別子、通常の保存先、CSP、Capabilitiesは変更していない。
+Commit・Push・ブランチ切り替え・インストーラー実行は行っていない。
+
+### 実施済み：自動検証
+
+| コマンド | 結果 |
+| --- | --- |
+| `npm run build` | 終了コード0。TypeScriptとVite本番ビルド成功 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了コード0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了コード0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了コード0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了コード0、71 passed / 0 failed / 0 ignored。main・doc-testは各0件 |
+| `npm run tauri build` | 終了コード0、通常設定でWindows Release・MSI・NSIS生成成功 |
+| `git diff --check` | 終了コード0 |
+
+最終再実行のコマンド別終了コードとログは `.verification/phase34/final-check-results.json`、`final-check-*.log` に保存した。
+
+既存71件はそのまま維持。JPEG・PNG・WebP、非対応・破損画像、20MiB・4,000万画素・1回20枚の制限、
+商品内重複・別商品への独立取り込み、20枚を超える商品の並べ替えを含む。
+SQL途中失敗・実COMMIT失敗時のロールバック、COMMIT結果不明の解決分岐、欠落・Windows共有ロック、
+非置換配置・隔離先衝突、junction/reparse point、不正パス、共通permitによる競合拒否、
+OSロック下のDB参照再取得と回収失敗時の保持も成功した。通常のsymlink作成そのものの実機追加試験は行っていない。
+テストは専用一時DB・メディアを使い、本番LocalDataへアクセスしていない。
+
+### 実施済み：Windows Release生成
+
+| 通常設定の生成物（リポジトリルートからの相対パス） | サイズ（bytes） |
+| --- | ---: |
+| `src-tauri/target/release/listing-pilot.exe` | 7,201,792 |
+| `src-tauri/target/release/bundle/msi/Listing Pilot_0.1.0_x64_en-US.msi` | 3,608,576 |
+| `src-tauri/target/release/bundle/nsis/Listing Pilot_0.1.0_x64-setup.exe` | 2,594,114 |
+
+通常ReleaseのRustビルドは2分26秒で成功。既存識別子の末尾 `.app` に関するmacOS向け警告は継続。
+アプリ名 `Listing Pilot`、識別子 `com.listingpilot.app`、アイコンと配布設定は維持。
+通常EXEは実行せず `.verification/phase34/normal-release.exe` に保存し、検証後に元のtarget配置へコピーして
+生成直後のSHA-256 `83AF3076E719A93D63220A57C183805F89429BBF7172CEA594FFCEA082820ED3` と照合した。
+MSI・NSISのサイズとSHA-256は `.verification/phase34/build-artifacts.json` に保持する。
+生成成功はインストール成功を意味しない。
+
+### 実施済み・制約あり：隔離Releaseと開発版の実操作
+
+検証PCはWindows build 26200、WebView2 Runtime 157.0.4341.42。
+本番LocalDataと既存の検証画像・成果物は使わず、新設 `.verification/phase34/` だけを使用した。
+画像は今回生成した32×24 PNG 5枚とJPEG 1枚。実画面ではPNG・JPEGを確認し、WebP・上限・非対応形式はRustテストで確認した。
+
+通常の設定ファイルを変更せず、次で保存先だけを上書きした別のReleaseを生成した。
+
+```powershell
+npm run tauri build -- --no-bundle --config .verification/phase34/portable-config.json
+```
+
+設定内容は `app.appDirectoriesOverride: "./data"` のみ。公式同梱スキーマ・Tauri PathResolverの実装で、
+実行ファイル隣の専用dataとAsset Protocolの `$APPLOCALDATA` に適用されることを事前確認した。
+本番CSP・Capabilities・識別子・アプリコードは通常Releaseと同じ。ビルドは終了コード0、2分19秒で成功。
+この専用ReleaseのSHA-256は `C856B9CA720430A8A335CC45C3578160C0CC861C0F4D44E7E4BFB7CD358D658F`。
+起動後も `plugin:path|resolve_directory`（AppLocalData）を最初に実照会し、期待した専用パスとの一致を確認してから商品操作した。
+
+以下のルートはすべて `C:\Users\owner\Desktop\sm-dev\listing-pilot\.verification\phase34\` の下。
+DBは各dataルート直下の `listing-pilot.sqlite3`、メディアは同じルートの `media/`、WebViewプロファイルも同じルート内。
+
+| 用途 | 実際の実行ファイル | dataルート |
+| --- | --- | --- |
+| Release統合操作・再起動 | `listing-pilot.exe` | `data/` |
+| バックアップ復元後の起動・商品削除再検証 | `restored-app/listing-pilot.exe`（同一バイナリ） | `restored-app/data/` |
+| 削除確定・ファイル残存の回復試験 | `recovery-app/listing-pilot.exe`（同一バイナリ） | `recovery-app/data/` |
+| 開発版疎通 | リポジトリの `src-tauri/target/debug/listing-pilot.exe` | `dev-data/`（dev-config.jsonの絶対パス） |
+
+開発版は `npm run tauri dev -- --config .verification/phase34/dev-config.json` で起動。
+実WebView2にlocalhost限定CDPで接続し、Reactフォーム・ボタン、Rust IPC、Rustネイティブ画像選択を使用した。
+異常入力・古いスナップショットの注入や結果照会にはCDPから実IPCも呼び出した。Tauriモックは使っていない。
+
+| シナリオ | 観測結果 |
+| --- | --- |
+| 商品A・B登録、A編集 | AはUIフォームから登録・名称/ブランド/価格/メモを変更。詳細取得値と保存結果が一致。Bは実IPC登録 |
+| 異常入力 | 空SKU・空商品名は `required_field`、負の価格は `invalid_price`、SKU重複は `duplicate_sku`、不在IDは `product_not_found` |
+| 画像取り込み | AにPNG 3枚・JPEG 1枚、Bに同一内容PNG 1枚を取り込み実表示。管理バイト列・SHA-256が選択元と一致 |
+| 並べ替え | UIで先頭を移動、全ID順と0始まり連番を照合。先頭/末尾の移動無効化、古い順序の `stale_data`、追加画像の末尾配置を確認 |
+| 画像1枚削除 | 確認からキャンセルでAPI結果不変。先頭を削除し残存4枚・連番・実表示を確認。deletedのバイト一致、復元起動時に削除画像が戻らないことを確認 |
+| 商品削除 | 商品名・SKU・4枚の確認、キャンセル保持、確認後の商品更新による拒否と再確認案内、最新内容での確定削除を確認 |
+| 画像0枚の商品C | UI確認に0枚表示、削除後一覧から消えることを確認。不必要な移動を行わない内部経路は既存テストで確認 |
+| 他商品の保持・再起動 | Bの商品・画像メタデータが不変。通常終了後の専用Release再起動でA・Cが戻らず、Bの画像が表示される |
+| 古い画像構成での商品削除 | 画像追加・削除・順序変更による拒否は既存Rustテストで成功。実UIでの注入は商品更新ケースを確認 |
+| 開発版 | 別の空DBへ商品登録、一覧再取得、詳細表示の実IPC成功 |
+| 実行時エラー | 成功した各観測区間でJavaScript例外・CSP違反なし。通常操作で新規コンソールエラーなし |
+
+メイン画像は先頭に連動する実装と表示を確認。UI保存中の厳密な二重クリックIPC回数計測は未実施。
+Rustの共通permit・不正入力拒否・ロールバックの検証で代替しており、すべてのタイミング競合を実UIで網羅したとはしない。
+
+### 実施済み：SQLite・メディア整合性と回復
+
+アプリ停止中、専用DBをPython sqlite3の読み取り専用URIで開き、修復書き込みを行わず検査した。
+バックアップ前・復元直後は2商品/登録画像5枚、最終のsource・restored・recoveryは各1商品/登録画像1枚。
+全DBで `integrity_check = ok`、`foreign_key_check = 0行`。
+孤立画像レコード0、登録画像の欠落0、UUID由来相対パスとMIME拡張子、0始まり連番、
+ファイルサイズ・SHA-256・originalsの全参照を照合した。最終の各領域には隔離画像5枚を保持し、選択元ともハッシュ一致。
+
+追加回復試験ではバックアップの新しいコピーだけで商品A・画像レコードをトランザクション削除し、
+管理画像4枚はoriginalsに残した。専用Releaseの次回起動で
+`Quarantined 4 incomplete or orphaned media files` を観測し、4枚の `.recovered` と元ハッシュの一致、
+Bの参照中画像の実表示・ハッシュ不変、既存deleted画像の保持を確認した。
+これはDB確定後・ファイル移動前の状態再現であり、プロセスの当該瞬間の強制終了・電源断・実ディスク故障の再現ではない。
+
+### 実施済み：本番CSPとセキュリティ
+
+Releaseの実HTMLレスポンスヘッダーで制限的CSPとTauriによるscriptハッシュ追加を確認した。
+`unsafe-inline`・`unsafe-eval` はなく、実画像はAsset Protocolから表示できる。
+実WebView2で専用DB・生成した選択元PNG・deleted画像の3種類をAsset画像URLとして要求し、すべてHTTP 403で拒否。
+これらの意図した拒否時のみネットワークエラー3件を観測し、正常操作のエラーと分けて記録した。
+staging・その他quarantineは設定のscope外であることを静的確認し、個別の実URL要求は未実施。
+
+Capabilitiesは `core:default` のみ。Reactのinvokeは `src/lib/api/` に閉じ、
+公開Commandsに任意SQL・任意パス読取/移動はない。外部リンク起動・外部API通信の実装は見当たらない。
+UUID/MIMEからのパス検証、全親要素のリンク/reparse検査、Windows `MoveFileExW(flags=0)`、
+OSロック保持、DB確認→OSロック→ロック下再照会はコードと既存テストで確認した。
+包括的な通信監視・侵入試験は行っていない。
+
+### 実施済み・制約あり：バックアップと復元
+
+専用Releaseを `CloseMainWindow` → `WaitForExit` で正常終了し、2商品/登録画像5枚/削除済み隔離画像1枚の時点で
+DB・media内の全ファイルを新設 `backup/` へコピーした。コピー元・バックアップ・`restored-app/data/` の
+全8ファイル（DB、lock、originals 5枚、deleted 1枚）の相対パスとSHA-256が一致。
+コピー元を変更していないことも照合した。バックアップの `journal_mode = delete`、`user_version = 2` を読み取り確認し、
+今回のバックアップにwal/shm/journalの残存はなかった。
+
+別領域にコピーした同一Releaseを起動し、全商品フィールド、画像順、Aの4枚/Bの1枚の実表示とバイト一致、
+削除済み画像の非再登録を確認。コピー直後のDB内容と整合性も一致した。
+その後は復元側で商品削除の再検証を行ったため、復元領域の最終状態はバックアップ取得時とは異なる。
+元の `backup/` は保持している。
+
+ユーザー向け手順は [backup-and-restore.md](backup-and-restore.md) に追加。
+WAL・hot journalが残る異常終了データからの復元、異なるアプリ版への移行、本番保存先への復元は未実施。
+
+### 失敗・環境制約と対処
+
+- 初回Viteはサンドボックスの子プロセス起動制限による `spawn EPERM` で失敗。
+  実行制限外で同一 `npm run build` を再実行して終了コード0。コード・依存の変更は不要だった。
+- 最初のPowerShellプロファイルは既存fnmのmultishell作成がアクセス拒否。以後 `-NoProfile` 相当で実行し、設定は変更していない。
+- 新規ローカルpickスクリプトのUTF-8 BOM不足による構文エラーを修正。
+  ネイティブ画像選択直後の取り込み完了待機不足も修正し、再実行成功。アプリ不具合とは判定していない。
+- 初回の再起動接続はCDP開始前の `ECONNREFUSED`。起動待機を追加。
+  復元初回はWebView初期化前のabout:blankをハーネスが再読込して空画面で停止したため、
+  当該専用プロセスだけを停止し、アプリURL待機に修正して再起動・復元検証成功。
+- 商品削除の初回スクリプトは、直前の意図的403の履歴をCDPが再送し、最後のconsole検査が失敗。
+  操作・データのassertは成功していたが全体成功とは扱わず、ログ履歴をクリアして復元側でシナリオ全体を再実行し成功。
+- 開発版Vite watcherは専用WebView2のCookies/Cookies-journalで `EBUSY` を報告。
+  開発版の登録・一覧・詳細操作は成功したが、watcher問題が解消したとはしていない。ReleaseではViteを使わない。
+
+スクリプト・成功/失敗JSON・画面・専用DB・生成画像・バックアップ・復元・回復試験データは
+Git対象外の `.verification/phase34/` に保持した。既存の成果物は変更していない。
+検証アプリ・開発サーバー・デバッグ接続は終了した。
+
+### 未実施・正式リリース前の残課題
+
+- 通常設定の配布EXEそのものの実操作、署名・配布先PCでの信頼確認。
+- MSI/NSISの新規導入、初回起動、アンインストール、導入後/アンインストール後のデータ保持、上書き更新・旧版アップグレード。
+  専用VM・Windows Sandbox・隔離ユーザーを今回用意しておらず、実PCの既存インストール状態は変更していない。
+- 別PC、Windows 10/11比較、実電源断・ディスク故障、WAL残存時復元、全競合タイミングの実UI検証。
+- 同一ユーザーの別プロセスによる検査直後の親ディレクトリ差し替えへの既存制限は残る。
+
+判定は「自動回帰・配布物生成・保存先だけを隔離したReleaseの主要実操作とバックアップ復元は検証済み」。
+インストーラー導入と通常配布環境の品質確認を含む正式リリース判定は保留とする。
+
 ## Phase 3.3 安全な商品削除（2026-11-10 日本時間）
 
 開始時HEADは `a95f846`、作業ツリーはクリーン。Commit・Push・ブランチ切り替えは行っていない。
