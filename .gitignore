@@ -47,3 +47,6 @@ lerna-debug.log*
 
 # Local Memo
 memo/
+
+# Local product test fixtures
+/test-fixtures/
