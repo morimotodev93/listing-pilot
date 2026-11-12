@@ -5,6 +5,17 @@
 
 ## React
 
+Phase 4.1の共通項目管理は、商品画面を保持したまま `App` 内の「カスタム項目設定」を開いて使用する。
+`features/attributes/components/AttributeManager.tsx` → `lib/api/attributes.ts` →
+`commands/attribute.rs` → `services/attribute_service.rs` → `infrastructure/db/attribute_repository.rs`
+の経路で、一覧・作成・名前変更・非表示/復元を扱う。Commandsは既存のblocking workerとDB Mutexを使う。
+型・入力検証は `domain/attribute.rs` に置く。IPCは入出力ともcamelCase、型値は `text` / `number`。
+入力型は未知のフィールドを拒否し、更新APIに型・単位を含めない。
+保存中は同期refとdisabledで二重送信を防ぎ、非表示確認のキャンセルでは更新IPCを送らない。
+競合時は入力を保持して変更操作を止め、利用者による最新一覧取得後に編集し直す。
+定義の全件取得後に表示を絞り込み、順序はRust側で確定する。値入力API・物理削除APIは設けない。
+新規依存・ルーターは追加しない。設計判断は [ADR 0006](decisions/0006-custom-product-attributes.md) を参照。
+
 Phase 3.3の商品削除は `ProductDetail` → `lib/api/products.ts` → `commands/product.rs` →
 `services/product_deletion_service.rs` の経路です。プレビューと削除はblocking worker上で処理します。
 `get_product_delete_preview({ productId })` は読取トランザクションで商品全体と正規順序の全画像IDを返します。

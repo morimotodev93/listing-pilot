@@ -4,6 +4,9 @@ use serde::Serialize;
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum AppError {
     RequiredField,
+    InvalidAttributeDefinition,
+    DuplicateAttributeName,
+    AttributeNotFound,
     DuplicateSku,
     InvalidPrice,
     ProductNotFound,
@@ -30,9 +33,14 @@ impl From<rusqlite::Error> for AppError {
     fn from(error: rusqlite::Error) -> Self {
         if let rusqlite::Error::SqliteFailure(ref code, Some(ref message)) = error
             && code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
-            && message == "UNIQUE constraint failed: products.sku"
         {
-            return Self::DuplicateSku;
+            match message.as_str() {
+                "UNIQUE constraint failed: products.sku" => return Self::DuplicateSku,
+                "UNIQUE constraint failed: attribute_definitions.name" => {
+                    return Self::DuplicateAttributeName;
+                }
+                _ => (),
+            }
         }
         eprintln!("Database operation failed: {error}");
         Self::DatabaseOperation

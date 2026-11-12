@@ -18,3 +18,4 @@ async fn execute<T: Send + 'static>(
         .await
         .map_err(|_| AppError::DatabaseOperation)?
 }
+pub mod attribute;

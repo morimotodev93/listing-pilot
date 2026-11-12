@@ -2,6 +2,9 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const messages: Record<string, string> = {
   required_field: "SKUと商品名を入力してください。",
+  invalid_attribute_definition: "項目名は1〜80文字、単位は20文字以内で入力し、改行・制御文字は使わないでください。単位はNumber項目だけに設定できます。",
+  duplicate_attribute_name: "この項目名はすでに登録されています。非表示の項目も確認し、別の名前を入力してください。",
+  attribute_not_found: "項目が見つかりません。項目一覧を再読み込みして確認してください。",
   duplicate_sku: "このSKUはすでに登録されています。別のSKUを入力してください。",
   invalid_price: "価格は0〜9,007,199,254,740,991円の整数で入力してください。",
   product_not_found: "商品が見つかりません。一覧を再読み込みしてください。",

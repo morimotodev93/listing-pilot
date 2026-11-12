@@ -1,10 +1,13 @@
-# 商品データモデル（Phase 3.5）
+# 商品データモデル（Phase 4.1）
+
+現在のスキーマは3。0003で共通項目定義と将来用の値テーブルを追加する。
+既存商品・画像の列・バイト列・参照は変更しない。以下のPhase 3.xに関する「追加しない」は当時の変更範囲を示す。
 
 商品編集は既存の `updated_at` を楽観ロックのトークンとして使用します。
 フォーム開始時の値を `expectedUpdatedAt` として渡し、IDと更新日時を条件に単一SQLで更新します。
 一致しなければ `stale_data`、商品自体がなければ `product_not_found` とし、競合時は全フィールド・更新日時を保持します。
 更新成功時の日時は現在UTCと「前回日時 + 1ns」の大きい方です。画像操作では商品更新日時を変更しません。
-スキーマバージョン2・既存マイグレーション・一意制約は変更しません。
+商品編集の仕様・既存0001/0002マイグレーション・SKU一意制約は変更しません。
 
 商品削除は、読取トランザクションで取得した商品全フィールド・正規順序の画像IDを確認スナップショットとします。
 商品情報全体の一致により、更新日時が変わらないSKU・商品名などの変更も拒否します。
@@ -14,13 +17,13 @@
 DB確定後に各画像を非置換隔離し、対象数＝隔離済み＋欠落＋保留を返します。0枚の商品も削除できます。
 COMMIT失敗後はautocommit・商品ID・全画像ID・全相対パスを同一の読取スナップショットで再照会し、
 削除確定を確認できたときだけ隔離します。不明・不整合は `product_deletion_unknown` で再起動確認を案内します。
-新しいテーブル・列・マイグレーション・削除履歴は追加しません。
+商品削除用の新しいテーブル・列・削除履歴は追加しません。
 
 画像の1枚削除は `product_id` と `id` で対象を限定し、変更件数1を確認します。
 同一IMMEDIATEトランザクションで残存画像を `sort_order, created_at, id` 順に0から連番化し、
 商品・他画像のメタデータと `products.updated_at` は保持します。最後の画像も削除できます。
 不在・別商品の画像・不正UUIDは `image_not_found` を返します。
-スキーマバージョンは2のまま、既存SQL・一意制約を維持し、新規テーブル・削除履歴は追加しません。
+画像削除によるスキーマ変更はなく、既存SQL・一意制約を維持し、削除履歴は追加しません。
 
 DB確定後の管理画像は `media/quarantine/deleted/{商品UUID}/{画像UUID}.{ext}` へ非置換移動します。
 返却契約は `deleted: true`、`affected_image_count: 1` と、隔離済み・欠落・隔離保留の各件数です。
@@ -87,8 +90,8 @@ Windowsでは通常 `%LOCALAPPDATA%\com.listingpilot.app\listing-pilot.sqlite3`�
 初回のみ保存先とDBを作成します。既存ファイルは保持し、初期化失敗を通知します。
 各接続でforeign_keys=ON、busy_timeout=5秒を設定します。
 
-`PRAGMA user_version` が0なら、IMMEDIATEトランザクション内で0001→0002とバージョン2まで適用します。
-1なら0002だけを適用し、2なら変更しません。3以上は初期化エラーにし、商品・画像を変更しません。
+`PRAGMA user_version` が0なら、IMMEDIATEトランザクション内で0001→0002→0003とバージョン3まで適用します。
+1なら0002→0003、2なら0003を適用し、3なら変更しません。4以上は初期化エラーにし、既存データを変更しません。
 失敗時はDDLとバージョン更新をロールバックします。将来の変更は番号付きSQLを追加し、
 同じトランザクション内で順に適用する方式を拡張します。適用済みのSQLは変更しません。
 
@@ -116,3 +119,35 @@ SQLiteとファイル操作全体を一つのトランザクションにはで�
 `media/quarantine/{UUID}.recovered` にrenameし、完全削除しません。危険なリンクや不正なDBパスがあれば整理を停止します。
 登録済みの欠落ファイルはDBに残し、一覧APIでプレビューなしを返します。UIは画像がない旨とバックアップ確認を表示します。
 隔離画像の自動再登録や元のパスへの自動復元は行いません。元ファイルから再取り込みするか、DBとmediaを揃えたバックアップで復旧してください。
+
+## attribute_definitions（Phase 4.1）
+
+正本は `src-tauri/migrations/0003_create_custom_attributes.sql`。
+
+| 列 | 型・意味 |
+| --- | --- |
+| id | TEXT PRIMARY KEY NOT NULL、Rust生成UUID v4 |
+| name | TEXT NOT NULL UNIQUE COLLATE BINARY。Rust trim後1〜80 Unicode文字、制御文字・改行禁止 |
+| data_type | TEXT NOT NULL、CHECKでtext / numberのみ |
+| unit | TEXT NULL。TextはNULL必須、Numberは任意・Rust trim後最大20文字、空欄はNULL |
+| archived_at | TEXT NULL。非表示はUTC日時、復元はNULL |
+| created_at / updated_at | TEXT NOT NULL、UTC RFC3339（ナノ秒・Z） |
+
+型・単位は作成後変更不可。名前変更はUUID・作成日時・型・単位を保持する。
+非表示でも一意制約の対象となり、定義・値を物理削除しない。
+名前変更・非表示・復元はID＋期待する更新日時で更新し、次の更新日時は前回+1ns以上。
+一覧は通常項目→非表示項目、それぞれcreated_at・id昇順。
+
+## product_attribute_values（Phase 4.2用の予約）
+
+| 列 | 型・制約 |
+| --- | --- |
+| product_id | TEXT NOT NULL、products(id)へのON DELETE RESTRICT |
+| attribute_id | TEXT NOT NULL、attribute_definitions(id)へのON DELETE RESTRICT |
+| value | TEXT NOT NULL、Unicode空白だけの文字列をCHECKで拒否 |
+
+主キーは `(product_id, attribute_id)`。未入力は行なし、Numberの将来値も十進数文字列として保持しREALは使わない。
+Phase 4.1に値登録API・商品入力UIはない。値がある商品の削除は外部キー違反で全件ロールバックし、
+商品・画像・値を保持する。Phase 4.2で確認・再検証・値削除を安全な既存トランザクションへ統合する。
+スキーマ3は旧版非互換のため、適用前に停止中のDB・media一組をバックアップする。
+詳細は [ADR 0006](decisions/0006-custom-product-attributes.md) を参照。

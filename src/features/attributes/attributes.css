@@ -1,0 +1,13 @@
+.attribute-settings > summary { font-weight: 600; color: #244a8f; }
+.attribute-manager { margin-top: 24px; }
+.attribute-create { max-width: 580px; margin-bottom: 28px; }
+.attribute-manager select { width: 100%; border: 1px solid #aab8cb; border-radius: 6px; padding: 11px; font: inherit; color: inherit; background: white; }
+.attribute-manager select:focus-visible { outline: 2px solid #285bc6; outline-offset: 2px; }
+.attribute-list-heading { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+.attribute-filter { display: flex; align-items: center; gap: 8px; margin: 0; }
+.attribute-filter input { width: auto; }
+.attribute-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.attribute-edit { max-width: 580px; margin-top: 24px; }
+.attribute-manager dialog { max-width: min(560px, calc(100% - 32px)); border: 1px solid #dce3ed; border-radius: 12px; padding: 24px; color: inherit; overflow-wrap: anywhere; }
+.attribute-manager dialog::backdrop { background: rgb(20 35 55 / 45%); }
+.attribute-manager .actions { flex-wrap: wrap; }

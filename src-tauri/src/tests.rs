@@ -184,7 +184,7 @@ fn repeated_migrations_preserve_data() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
 }
 #[test]
@@ -243,12 +243,12 @@ fn migration_failure_rolls_back_schema_and_version() {
 #[test]
 fn newer_schema_is_rejected_without_modification() {
     let mut db = database();
-    db.pragma_update(None, "user_version", 3).unwrap();
+    db.pragma_update(None, "user_version", 4).unwrap();
     assert!(migrations::apply(&mut db).is_err());
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
 }
 #[test]

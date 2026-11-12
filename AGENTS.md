@@ -85,3 +85,10 @@ git diff --check
 - `docs/data-model.md` — database structures and data behavior.
 - `docs/decisions/` — accepted architectural and security decisions.
 - `docs/verification.md` — verification history and known gaps.
+
+## Code review artifacts
+
+- Store temporary review ZIP files, patches, and related review artifacts under `.review/`.
+- Keep `.review/` excluded from Git using `/.review/` in `.gitignore`.
+- Do not stage or commit review artifacts.
+- Do not include production databases, media files, secrets, or build outputs in review archives.

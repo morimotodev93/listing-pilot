@@ -391,7 +391,9 @@ fn migration_zero_one_two_and_existing_product_preservation() {
             db.pragma_update(None, "user_version", 1).unwrap();
             let product = product_service::create(&db, input("preserved")).unwrap();
             if version == 2 {
-                migrations::apply(&mut db).unwrap();
+                db.execute_batch(include_str!("../migrations/0002_create_product_images.sql"))
+                    .unwrap();
+                db.pragma_update(None, "user_version", 2).unwrap();
             }
             Some(product)
         } else {
@@ -401,7 +403,7 @@ fn migration_zero_one_two_and_existing_product_preservation() {
         assert_eq!(
             db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            2
+            3
         );
         assert!(repository::all(&db).unwrap().is_empty());
         if let Some(product) = product {
@@ -1967,6 +1969,153 @@ fn product_delete_sql_image_partial_and_product_failures_rollback_every_record()
         }
         assert_eq!(f.count("quarantine"), 0);
     }
+}
+
+#[test]
+fn schema_two_startup_migration_keeps_registered_images_and_original_bytes() {
+    let fixture = Fixture::new();
+    fixture.import_distinct(60, 2);
+    let images = fixture.ordered();
+    let bytes: Vec<_> = images
+        .iter()
+        .map(|i| fs::read(fixture.media.image_path(i).unwrap()).unwrap())
+        .collect();
+    // Reproduce the exact pre-4.1 schema inside this dedicated temporary fixture.
+    fixture.db.with(|db| {
+        db.execute_batch("DROP TABLE product_attribute_values; DROP TABLE attribute_definitions; PRAGMA user_version = 2;")?;
+        Ok(())
+    }).unwrap();
+    let directory = fixture.temp.0.clone();
+    let product = fixture.product.clone();
+    drop(fixture.db);
+    drop(fixture.media);
+    fs::rename(
+        directory.join("test.sqlite3"),
+        directory.join("listing-pilot.sqlite3"),
+    )
+    .unwrap();
+    let (db, media) = crate::services::startup_service::initialize(&directory).unwrap();
+    assert_eq!(
+        db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    assert_eq!(product_service::get(&db, &product.id).unwrap(), product);
+    assert_eq!(repository::list(&db, &product.id).unwrap(), images);
+    for (image, expected_bytes) in images.iter().zip(&bytes) {
+        assert_eq!(
+            &fs::read(media.image_path(image).unwrap()).unwrap(),
+            expected_bytes
+        );
+    }
+    assert_eq!(media.reconcile(&images).unwrap(), 0);
+    drop(db);
+    drop(media);
+}
+
+#[test]
+fn attribute_values_restrict_product_delete_and_preserve_product_images_bytes_after_restart() {
+    use crate::{domain::attribute::CreateAttributeInput, services::attribute_service};
+    let fixture = Fixture::new();
+    fixture.import_distinct(40, 2);
+    let images = fixture.ordered();
+    let bytes: Vec<_> = images
+        .iter()
+        .map(|i| fs::read(fixture.media.image_path(i).unwrap()).unwrap())
+        .collect();
+    let attribute = fixture
+        .db
+        .with(|db| {
+            let a = attribute_service::create(
+                db,
+                CreateAttributeInput {
+                    name: "重量".into(),
+                    data_type: "number".into(),
+                    unit: Some("g".into()),
+                },
+            )?;
+            db.execute(
+                "INSERT INTO product_attribute_values VALUES (?1, ?2, '0.1234567890123456789')",
+                rusqlite::params![fixture.product.id, a.id],
+            )?;
+            attribute_service::set_archived(
+                db,
+                crate::domain::attribute::SetAttributeArchivedInput {
+                    id: a.id,
+                    archived: true,
+                    expected_updated_at: a.updated_at,
+                },
+            )
+        })
+        .unwrap();
+    let expected = product_delete_input(&fixture);
+    assert_eq!(
+        delete_product(&fixture, &expected),
+        Err(AppError::DatabaseOperation)
+    );
+    assert_eq!(fixture.ordered(), images);
+    fixture
+        .db
+        .with(|db| {
+            assert_eq!(
+                product_service::get(db, &fixture.product.id).unwrap(),
+                fixture.product
+            );
+            assert_eq!(
+                crate::infrastructure::db::attribute_repository::get(db, &attribute.id).unwrap(),
+                attribute
+            );
+            assert_eq!(
+                db.query_row("SELECT value FROM product_attribute_values", [], |r| r
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+                "0.1234567890123456789"
+            );
+            Ok(())
+        })
+        .unwrap();
+    for (image, expected_bytes) in images.iter().zip(&bytes) {
+        assert_eq!(
+            &fs::read(fixture.media.image_path(image).unwrap()).unwrap(),
+            expected_bytes
+        );
+        assert!(!deleted_path(&fixture, image).exists());
+    }
+    let directory = fixture.temp.0.clone();
+    let product = fixture.product.clone();
+    // Release both the database and media lock before startup reconciliation.
+    drop(fixture.db);
+    drop(fixture.media);
+    fs::rename(
+        directory.join("test.sqlite3"),
+        directory.join("listing-pilot.sqlite3"),
+    )
+    .unwrap();
+    let (db, media) = crate::services::startup_service::initialize(&directory).unwrap();
+    assert_eq!(repository::list(&db, &product.id).unwrap(), images);
+    assert_eq!(product_service::get(&db, &product.id).unwrap(), product);
+    assert_eq!(
+        crate::infrastructure::db::attribute_repository::get(&db, &attribute.id).unwrap(),
+        attribute
+    );
+    assert_eq!(
+        db.query_row("SELECT value FROM product_attribute_values", [], |r| r
+            .get::<_, String>(
+            0
+        ))
+        .unwrap(),
+        "0.1234567890123456789"
+    );
+    for (image, expected_bytes) in images.iter().zip(&bytes) {
+        assert_eq!(
+            &fs::read(media.image_path(image).unwrap()).unwrap(),
+            expected_bytes
+        );
+    }
+    drop(db);
+    drop(media);
 }
 
 #[test]

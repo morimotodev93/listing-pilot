@@ -1,5 +1,124 @@
 # 開発環境の検証結果
 
+## Phase 4.1 共通カスタム商品項目（2026-11-12 日本時間）
+
+開始時は `main / a3080010222cc2082bde773e22c6500d738a1eb7`、作業ツリーはクリーン。
+共通項目の定義管理だけを追加。商品別の値入力・物理削除・型/単位の変更APIは公開していない。
+設計は [ADR 0006](decisions/0006-custom-product-attributes.md)、DDLは新規0003を参照。
+本番LocalData・既存バックアップ・既存fixtureは使用・変更せず、UUID付き一時DB/mediaと
+新設 `.verification/phase41/` の専用保存先を使用した。Commit・Push・ブランチ切り替えは実施していない。
+
+### 最終自動検証
+
+| コマンド | 結果 |
+| --- | --- |
+| `npm run build` | 終了コード0、TypeScript・Vite成功（Releaseビルド内でも成功） |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了コード0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了コード0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了コード0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了コード0、98 passed / 0 failed / 0 ignored、main/doc-testは各0件 |
+| `npm run tauri build` | 終了コード0、Windows Release・MSI・NSIS生成（Rust release 2分39秒） |
+| `npm run tauri build -- --no-bundle --config .verification/phase41/run2/dev-config.json` | 終了コード0、保存先だけを隔離した専用Release生成（2分17秒） |
+| `git diff --check` | 最終結果は終了コード0 |
+
+既存86件を削除・無効化せず、新規12件を追加した。既存テストの期待スキーマを3、未知スキーマを4へ更新し、
+移行前Version 2の準備は既存0002 SQLを直接適用するよう修正した。
+
+| 追加テスト | 確認内容 |
+| --- | --- |
+| `migrate_zero_one_two_to_three_preserves_every_product_and_image_column` | 0/1/2→3、商品全カラム・画像全メタデータ/参照保持、integrity/FK検査 |
+| `migration_three_failure_rolls_back_all_intermediate_schema_and_existing_data` | 0003途中のテーブル名衝突でDDL・user_versionを戻し、既存商品とsentinelを保持 |
+| `version_three_reapply_restart_and_future_version_rejection_preserve_data` | 3再適用・ファイルDB再接続、定義/単位/アーカイブ/高精度文字列値保持、4/99拒否 |
+| `create_text_number_optional_units_unicode_and_binary_names` | Text/Number、単位あり/なし/空白、UUID v4・UTC、trim、Unicode文字数、BINARY区別 |
+| `reject_invalid_names_units_types_and_text_units_without_creating_rows` | 空白名・上限超過・制御文字/改行・未知の型・Text単位を拒否 |
+| `rename_duplicates_archive_restore_and_stale_updates_preserve_identity_and_values` | UUID/作成日時/型/単位/値保持、通常/非表示重複、復元、古いトークン、不在 |
+| `conditional_repository_updates_reject_changes_after_service_read` | 読取後に別更新があっても条件付きSQLで名前変更/状態変更を拒否、不在と区別 |
+| `timestamp_advances_at_same_time_and_backwards_clock_for_all_operations` | 同時刻/逆行を決定的に注入、名前変更/非表示/復元で最低1ns進む |
+| `list_order_uses_archive_state_created_at_and_uuid_tiebreaker` | 通常先、作成日時が同じ場合のUUID順 |
+| `database_constraints_reject_invalid_definitions_orphan_duplicate_and_blank_values` | DB型/単位/名前制約、孤立値・複合PK重複・Unicode空白値を拒否、参照先DELETEをRESTRICT |
+| `schema_two_startup_migration_keeps_registered_images_and_original_bytes` | 実PNG取り込み済みVersion 2のstartup移行、商品/画像/バイト列保持、誤回収0件 |
+| `attribute_values_restrict_product_delete_and_preserve_product_images_bytes_after_restart` | 値を直接用意してアーカイブ、実商品削除サービスの失敗で商品/全画像/値を戻し、ファイル非移動・再起動保持 |
+
+新規テストは専用ファイルDBを使用。将来用の値を作るSQLやテストスキーマの準備はtestモジュール内だけにある。
+商品登録・編集・SKU重複・楽観ロック、画像取り込み・並べ替え・削除、隔離、起動時回収、
+実別プロセスのロック保護を含む既存回帰テストもすべて成功した。
+
+### Windows実WebView2
+
+`npm run tauri dev -- --config .verification/phase41/run2/dev-config.json` で起動。
+保存先を `.verification/phase41/run2/data` に固定し、実IPCのAppLocalData解決結果が一致してから操作した。
+React→API層→Rust IPC→SQLite→UIの全経路を使い、APIモックは使用していない。
+
+| 操作 | 観測結果 |
+| --- | --- |
+| 項目作成 | TextとNumberを選択、Numberのときだけ単位入力表示、単位あり/なし、trim保存 |
+| 重複 | 作成・名前変更・非表示の名前再利用を拒否し、日本語エラー表示 |
+| 名前変更 | UUID/作成日時保持、一覧反映 |
+| 競合 | 編集中に実IPCで別更新後、保存を拒否し入力保持・再読み込み案内。保存ボタン停止、更新の自動再送なし |
+| 非表示・復元 | 確認キャンセルで更新IPC 0回、確定で通常一覧から除外、表示切替・復元成功 |
+| 二重送信 | 同一イベントループで作成フォームを2回送信して実IPC 1回、非表示確定2回クリックも実IPC 1回 |
+| 既存商品 | 登録・編集・一覧、SKU重複、古い更新トークンの拒否 |
+| 既存画像 | 今回生成の32×24 PNG 2枚をRustネイティブダイアログで選択、実表示、バイト列/SHA-256一致、並べ替え、削除キャンセルと確定隔離 |
+| 商品削除確認 | キャンセルで商品・残存画像を保持 |
+| Releaseで再起動 | 項目の名前/型/単位/非表示状態、商品全フィールド、画像順序/メタデータ/バイト列を保持。通常一覧では非表示項目を除外、切替後は非表示状態を表示 |
+| Releaseで更新・削除 | 本番CSP下で項目名変更、非表示確認キャンセル、商品削除が成功。項目定義は3件とも保持 |
+| Release二重起動 | 実アプリ2つを起動し、2つ目の項目管理全4 APIと商品一覧がmedia_busyで拒否された |
+| 隔離DB検査 | スキーマ3、integrity_check=ok、foreign_key_check=0行、画像SHA-256一致、値テーブル0件 |
+
+成功した `attributes` / `images` / `restart` / `release` 区間でJS例外・コンソールエラー・CSP違反0件。
+専用ReleaseのHTML応答で本番CSPとscriptハッシュを確認し、unsafe-inline/unsafe-evalがないことを検証した。
+全検証アプリ終了後のDBもスキーマ3・integrity_check=ok・外部キー違反0行だった。
+UIで削除した検証商品/画像レコードは0件、項目は3件保持し、隔離されたPNG2枚のハッシュは元画像2枚と一致した。
+二重起動中のGet-FileHashはSQLiteの共有条件で読み取り拒否されたため、当該区間のDBファイルハッシュ一致は主張しない。
+ローカル資料は `.verification/phase41/run2/smoke.mjs`、`*-result.json`、スクリーンショット、`data-check.py`。
+これらはGit対象外であり、CIの恒久的なUIテストではない。
+
+初回Viteはサンドボックスの子プロセス制限で `spawn EPERM`。同じビルドを通常権限で再実行して成功した。
+初回の追加Rust再起動テストはfixtureのDB名不一致を修正して成功した。
+UIスクリプトのCSP監視変数初期化漏れと、既存画像ボタンの古いセレクターを修正し再検証した。
+最初の隔離保存先と失敗記録は保持した。アプリの仕様・権限を緩める回避変更は行っていない。
+開発watcherにはWebViewキャッシュのEBUSY警告が出たが、上記成功区間の動作・データ検査は成功した。
+
+### Windows Release生成物
+
+通常設定のEXEは起動せず、専用ビルドの前に `.verification/phase41/run2/normal-release.exe` へ保持した。
+生成物のSHA-256は同フォルダーの `build-artifacts.json` に記録した。
+
+| 通常設定の生成物 | サイズ（bytes） |
+| --- | ---: |
+| `src-tauri/target/release/listing-pilot.exe` | 7,294,976 |
+| `src-tauri/target/release/bundle/msi/Listing Pilot_0.1.0_x64_en-US.msi` | 3,645,440 |
+| `src-tauri/target/release/bundle/nsis/Listing Pilot_0.1.0_x64-setup.exe` | 2,615,760 |
+
+通常EXEのSHA-256は `B060BB19E91D019854085717F4C9BDF0DCB7BD7183389936DF275D2E5E7CB6F3`。
+既存識別子末尾 `.app` に関するmacOS向け警告は継続している。識別子は変更していない。
+MSI/NSISは生成のみで、インストール成功の根拠にはしていない。
+
+専用Releaseは `.verification/phase41/run2/isolated-release.exe`、SHA-256は
+`B7253CAA3A113A3A3228C096F22F9037E8E7B42742F964875294D6F413094AD8`。
+通常Releaseと同じアプリコード・本番CSP・識別子を使い、AppLocalDataだけを専用パスに固定した。
+検証後は全専用プロセスを通常終了し、`target/release/listing-pilot.exe` は通常版へ戻してハッシュ一致を確認した。
+
+### 変更範囲とデータ保護
+
+- Rust追加：`domain/attribute.rs`、`services/attribute_service.rs`、`infrastructure/db/attribute_repository.rs`、`commands/attribute.rs`、`attribute_tests.rs`。
+- Rust変更：各mod.rs、lib.rsの登録、error.rs、migrations.rs、tests.rs、image_tests.rs。
+- UI追加：`features/attributes/types.ts`、`attributes.css`、`components/AttributeManager.tsx`、`lib/api/attributes.ts`。変更：App.tsx、request.ts。
+- DB追加：`migrations/0003_create_custom_attributes.sql`。文書：README、architecture、data-model、backup-and-restore、verification、ADR 0006。
+
+0001/0002、依存/lockfile、商品編集・削除・画像/起動時サービス、media_storage、識別子・通常保存先・CSP・Capabilitiesは変更していない。
+定義管理にDELETEはなく、非表示後も定義と参照値を保持する。既存の商品削除は空の値テーブルで成功し、
+値がある場合はRESTRICTで中止することを確認した。
+**移行テストでは既存の商品全カラム・画像メタデータ・参照・画像バイト列を保持した。** 本番データ上の移行は実行していない。
+移行前の停止中DB・media一組のバックアップが必要で、旧版はスキーマ3を開けない。
+
+インストーラーの導入・上書き更新・アンインストール、別PC、電源断・実ディスク故障は未検証。
+商品別値入力と、それに対応する商品削除の確認/値削除はPhase 4.2で実装する。
+
+最終Git状態は変更16ファイル、新規未追跡11ファイル（合計27）。削除・ステージ済み変更はない。
+`git status --short --untracked-files=all` の全出力は `.verification/phase41/run2/git-status.txt`。
+新規ファイルもレビューし、依存追加・定義の危険なDELETE・更新トークン照合漏れがないことを確認した。
+
 ## Phase 3.5 監査に基づく品質改善（2026-11-10 日本時間）
 
 開始は `main / b70c86e`、作業ツリーはクリーン、ローカル `origin/main` との差分0。
