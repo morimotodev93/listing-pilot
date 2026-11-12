@@ -34,6 +34,7 @@ pub struct ProductDeletePreview {
     pub image_count: usize,
     pub image_ids: Vec<String>,
     pub product: Product,
+    pub attribute_values: Vec<super::attribute_value::ProductAttributeValue>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,6 +44,7 @@ pub struct DeleteProductInput {
     pub expected_updated_at: String,
     pub expected_image_ids: Vec<String>,
     pub expected_product: Product,
+    pub expected_attribute_values: Vec<super::attribute_value::ProductAttributeValue>,
 }
 
 impl ProductInput {
@@ -67,4 +69,12 @@ impl ProductInput {
 fn nonempty(value: String) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductEditSnapshot {
+    pub product: Product,
+    pub definitions: Vec<super::attribute::AttributeDefinition>,
+    pub values: Vec<super::attribute_value::ProductAttributeValue>,
 }

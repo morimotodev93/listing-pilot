@@ -28,3 +28,4 @@ impl Database {
     }
 }
 pub mod attribute_repository;
+pub mod attribute_value_repository;

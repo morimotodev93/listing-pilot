@@ -1,14 +1,23 @@
-import { useEffect, useRef, useState } from "react";
-import { deleteProduct, getProductDeletePreview } from "../../../lib/api/products";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { deleteProduct, getProductDeletePreview, getProductEditSnapshot } from "../../../lib/api/products";
 import type { DeleteProductReport, ProductDeletePreview } from "../../../lib/api/products";
-import type { Product } from "../types";
+import type { Product, ProductEditSnapshot } from "../types";
 import { ProductImages } from "./ProductImages";
 
 type Props = { product: Product; onBack: () => void; onEdit: () => void; onDeleted: (report: DeleteProductReport) => void };
 const yen = new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY" });
 const date = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" });
 
-export function ProductDetail({ product, onBack, onEdit, onDeleted }: Props) {
+export function ProductDetail({ product: initialProduct, onBack, onEdit, onDeleted }: Props) {
+  const [snapshot, setSnapshot] = useState<ProductEditSnapshot | null>(null);
+  const [valueError, setValueError] = useState("");
+  const product = snapshot?.product ?? initialProduct;
+  useEffect(() => {
+    let active = true;
+    void getProductEditSnapshot(initialProduct.id).then(result => { if (active) setSnapshot(result); })
+      .catch((error: unknown) => { if (active) setValueError(error instanceof Error ? error.message : "カスタム値を取得できませんでした。"); });
+    return () => { active = false; };
+  }, [initialProduct.id]);
   const [importing, setImporting] = useState(false);
   const imageBusy = useRef(false);
   const operation = useRef(false);
@@ -39,7 +48,7 @@ export function ProductDetail({ product, onBack, onEdit, onDeleted }: Props) {
     operation.current = true; setBusy(true); setDeleting(true); setError("");
     try {
       const report = await deleteProduct({ productId: preview.product_id, expectedUpdatedAt: preview.updated_at,
-        expectedImageIds: preview.image_ids, expectedProduct: preview.product });
+        expectedImageIds: preview.image_ids, expectedProduct: preview.product, expectedAttributeValues: preview.attribute_values });
       dialog.current?.close(); setPreview(null); onDeleted(report);
     } catch (error: unknown) {
       dialog.current?.close(); setPreview(null);
@@ -63,12 +72,18 @@ export function ProductDetail({ product, onBack, onEdit, onDeleted }: Props) {
       <dt>登録日時</dt><dd><time dateTime={product.created_at}>{date.format(new Date(product.created_at))}</time></dd>
       <dt>更新日時</dt><dd><time dateTime={product.updated_at}>{date.format(new Date(product.updated_at))}</time></dd>
     </dl>
+    <h3>カスタム商品項目</h3>
+    {valueError ? <p className="error" role="alert">{valueError} 一覧へ戻って開き直してください。</p> : !snapshot ? <p role="status">読み込んでいます…</p> :
+      <dl className="product-information">{snapshot.definitions.filter(a => !a.archivedAt).map(a => {
+        const value = snapshot.values.find(v => v.attributeId === a.id)?.value;
+        return <Fragment key={a.id}><dt>{a.name}</dt><dd>{value === undefined ? "未設定" : `${value}${a.unit ? ` ${a.unit}` : ""}`}</dd></Fragment>;
+      })}</dl>}
     {error && <p className="error" role="alert">{error}</p>}
     {busy && <p role="status">{deleting ? "商品を削除しています…" : "最新の削除内容を確認しています…"}</p>}
     <dialog ref={dialog} aria-labelledby="delete-product-heading" onCancel={event => { event.preventDefault(); cancel(); }}>
       <h3 id="delete-product-heading">商品を削除しますか？</h3>
-      <dl><dt>商品名</dt><dd>{preview?.name}</dd><dt>SKU</dt><dd>{preview?.sku}</dd><dt>登録画像</dt><dd>{preview?.image_count}枚</dd></dl>
-      <p>この商品と登録画像{preview?.image_count}枚を削除します。管理画像ファイルは保護領域に保持されますが、商品情報と画像の登録をアプリ内から元に戻すことはできません。取り込み元の画像ファイルは変更されません。</p>
+      <dl><dt>商品名</dt><dd>{preview?.name}</dd><dt>SKU</dt><dd>{preview?.sku}</dd><dt>登録画像</dt><dd>{preview?.image_count}枚</dd><dt>カスタム値</dt><dd>{preview?.attribute_values.length}件（非表示項目を含む）</dd></dl>
+      <p>この商品と登録画像{preview?.image_count}枚、カスタム値{preview?.attribute_values.length}件を削除します。管理画像ファイルは保護領域に保持されますが、商品情報と画像の登録をアプリ内から元に戻すことはできません。取り込み元の画像ファイルは変更されません。</p>
       <div className="detail-actions"><button type="button" className="secondary" autoFocus disabled={busy} onClick={cancel}>キャンセル</button>
         <button type="button" disabled={busy || !preview} onClick={() => void confirmDelete()}>{deleting ? "削除中…" : "商品を削除"}</button></div>
     </dialog>

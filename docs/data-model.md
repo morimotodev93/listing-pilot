@@ -138,7 +138,7 @@ SQLiteとファイル操作全体を一つのトランザクションにはで�
 名前変更・非表示・復元はID＋期待する更新日時で更新し、次の更新日時は前回+1ns以上。
 一覧は通常項目→非表示項目、それぞれcreated_at・id昇順。
 
-## product_attribute_values（Phase 4.2用の予約）
+## product_attribute_values（Phase 4.2）
 
 | 列 | 型・制約 |
 | --- | --- |
@@ -146,8 +146,11 @@ SQLiteとファイル操作全体を一つのトランザクションにはで�
 | attribute_id | TEXT NOT NULL、attribute_definitions(id)へのON DELETE RESTRICT |
 | value | TEXT NOT NULL、Unicode空白だけの文字列をCHECKで拒否 |
 
-主キーは `(product_id, attribute_id)`。未入力は行なし、Numberの将来値も十進数文字列として保持しREALは使わない。
-Phase 4.1に値登録API・商品入力UIはない。値がある商品の削除は外部キー違反で全件ロールバックし、
-商品・画像・値を保持する。Phase 4.2で確認・再検証・値削除を安全な既存トランザクションへ統合する。
-スキーマ3は旧版非互換のため、適用前に停止中のDB・media一組をバックアップする。
-詳細は [ADR 0006](decisions/0006-custom-product-attributes.md) を参照。
+主キーは `(product_id, attribute_id)`。未入力は行なし、Numberも十進数文字列として保持しREALは使わない。
+Textはtrim後最大2,000 Unicode文字、制御文字・改行禁止。Numberは整数15桁・小数6桁以内で負数を許可する。
+商品と明示的な編集対象値を単一IMMEDIATEトランザクションで保存し、対象外・非表示の値を保持する。
+旧APIでattributeValuesを省略すると既存値に触れない。商品と各定義の更新日時で競合を検出する。
+商品削除は全値のスナップショットを確認・再検証後、対象商品IDの値だけを画像・商品と同じトランザクションで削除する。
+共通定義・他商品の値を保持し、COMMIT結果不明時はカスタム値参照も再照会して画像を保護する。
+スキーマ3と既存マイグレーションは変更しない。
+詳細は [ADR 0007](decisions/0007-product-attribute-values.md) を参照。

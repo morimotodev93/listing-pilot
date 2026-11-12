@@ -5,6 +5,7 @@ use serde::Serialize;
 pub enum AppError {
     RequiredField,
     InvalidAttributeDefinition,
+    InvalidAttributeValue,
     DuplicateAttributeName,
     AttributeNotFound,
     DuplicateSku,

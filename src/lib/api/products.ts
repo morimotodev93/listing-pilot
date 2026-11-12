@@ -1,10 +1,11 @@
 import { request } from "./request";
-import type { Product, ProductInput } from "../../features/products/types";
+import type { Product, ProductInput, AttributeValuesInput, ProductAttributeValue, ProductEditSnapshot } from "../../features/products/types";
 
 export const listProducts = () => request<Product[]>("list_products");
 export const getProduct = (id: string) => request<Product>("get_product", { id });
-export const createProduct = (input: ProductInput) => request<Product>("create_product", { input });
-export type UpdateProductRequest = { id: string; input: ProductInput; expectedUpdatedAt: string };
+export const createProduct = (input: ProductInput, attributeValues?: AttributeValuesInput) => request<Product>("create_product", { input, attributeValues });
+export const getProductEditSnapshot = (id: string) => request<ProductEditSnapshot>("get_product_edit_snapshot", { id });
+export type UpdateProductRequest = { id: string; input: ProductInput; expectedUpdatedAt: string; attributeValues?: AttributeValuesInput };
 export const updateProduct = (input: UpdateProductRequest) => request<Product>("update_product", input);
 
 export type ProductDeletePreview = {
@@ -15,12 +16,14 @@ export type ProductDeletePreview = {
   image_count: number;
   image_ids: string[];
   product: Product;
+  attribute_values: ProductAttributeValue[];
 };
 export type DeleteProductInput = {
   productId: string;
   expectedUpdatedAt: string;
   expectedImageIds: string[];
   expectedProduct: Product;
+  expectedAttributeValues: ProductAttributeValue[];
 };
 export type DeleteProductReport = {
   deleted: true;

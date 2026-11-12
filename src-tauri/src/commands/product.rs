@@ -22,9 +22,10 @@ pub async fn get_product(state: State<'_, Database>, id: String) -> Result<Produ
 pub async fn create_product(
     state: State<'_, Database>,
     input: ProductInput,
+    attribute_values: Option<crate::domain::attribute_value::AttributeValuesInput>,
 ) -> Result<Product, AppError> {
     execute(state, move |connection| {
-        product_service::create(connection, input)
+        product_service::create_with_values(connection, input, attribute_values)
     })
     .await
 }
@@ -33,10 +34,17 @@ pub async fn update_product(
     state: State<'_, Database>,
     id: String,
     input: ProductInput,
+    attribute_values: Option<crate::domain::attribute_value::AttributeValuesInput>,
     expected_updated_at: String,
 ) -> Result<Product, AppError> {
     execute(state, move |connection| {
-        product_service::update(connection, &id, input, &expected_updated_at)
+        product_service::update_with_values(
+            connection,
+            &id,
+            input,
+            &expected_updated_at,
+            attribute_values,
+        )
     })
     .await
 }
@@ -67,4 +75,15 @@ pub async fn delete_product(
     })
     .await
     .map_err(|_| AppError::ProductDeletionUnknown)?
+}
+
+#[tauri::command]
+pub async fn get_product_edit_snapshot(
+    state: State<'_, Database>,
+    id: String,
+) -> Result<crate::domain::product::ProductEditSnapshot, AppError> {
+    execute(state, move |connection| {
+        product_service::edit_snapshot(connection, &id)
+    })
+    .await
 }

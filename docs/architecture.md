@@ -3,6 +3,21 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
+## Phase 4.2 商品別カスタム値
+
+ProductForm / ProductDetail → lib/api/products.ts → commands/product.rs → product_service /
+attribute_value_service → attribute_value_repository の経路で、商品と値を一括保存・取得する。
+`get_product_edit_snapshot` は商品・定義・全値の同一読取トランザクションを返す。
+作成・編集コマンドには任意のトップレベル引数attributeValuesを追加し、旧呼び出しを維持する。
+サービスがIMMEDIATEトランザクションを所有し、商品トークンと全編集対象定義のトークン・非表示状態を照合する。
+値の文字列検証はdomain/attribute_value.rs、個別UPSERT／DELETEはDB Repositoryが担当する。
+非表示・未指定の値は更新しない。UIは読込失敗時の保存を禁止し、競合時は入力を保持して保存を停止する。
+
+商品削除は全カスタム値をプレビュー・事前照合・IMMEDIATE再照合に含める。
+対象商品IDの値DELETE（件数照合）→画像DELETE→商品DELETE→残存参照検査→COMMIT→画像隔離の順。
+COMMIT失敗後の参照再照会にも値を含め、状態不明時は画像を保持する。
+スキーマ3、メディアpermit・OSロック、CSP・権限を維持する。詳細は [ADR 0007](decisions/0007-product-attribute-values.md)。
+
 ## React
 
 Phase 4.1の共通項目管理は、商品画面を保持したまま `App` 内の「カスタム項目設定」を開いて使用する。
@@ -13,7 +28,7 @@ Phase 4.1の共通項目管理は、商品画面を保持したまま `App` 内�
 入力型は未知のフィールドを拒否し、更新APIに型・単位を含めない。
 保存中は同期refとdisabledで二重送信を防ぎ、非表示確認のキャンセルでは更新IPCを送らない。
 競合時は入力を保持して変更操作を止め、利用者による最新一覧取得後に編集し直す。
-定義の全件取得後に表示を絞り込み、順序はRust側で確定する。値入力API・物理削除APIは設けない。
+定義の全件取得後に表示を絞り込み、順序はRust側で確定する。定義の物理削除APIは設けない。商品別の値入力はPhase 4.2の経路を参照。
 新規依存・ルーターは追加しない。設計判断は [ADR 0006](decisions/0006-custom-product-attributes.md) を参照。
 
 Phase 3.3の商品削除は `ProductDetail` → `lib/api/products.ts` → `commands/product.rs` →
@@ -63,7 +78,7 @@ importしません。将来Webデモが必要になった際は、この窓口�
 - `src-tauri/src/main.rs`：デスクトップのエントリーポイント。
 - `src-tauri/capabilities/default.json`：メインウィンドウの基本権限。追加プラグイン権限なし。
 
-接続確認用の `greet` は引数を持たず `String` を返します。商品用の6つのCommandを公開し、
+接続確認用の `greet` は引数を持たず `String` を返します。商品用の7つのCommandを公開し、
 Commandsは薄い入口にし、検証・エラー変換とRust内部モジュールへの委譲を担います。
 
 ## Rust
@@ -81,7 +96,7 @@ ProductList / ProductForm → lib/api/products.ts → Tauri invoke
 ```
 
 - `features/products/types.ts`：IPCで受け渡す商品型。`hooks/useProducts.ts`：一覧取得と再読み込み。古い応答の反映を防止。
-- `commands/product.rs`：6つのIPC入口。`spawn_blocking` でDB処理をワーカースレッドへ委譲。
+- `commands/product.rs`：7つのIPC入口。`spawn_blocking` でDB処理をワーカースレッドへ委譲。
 - `services/product_service.rs`：入力検証、UUID生成、UTC日時、商品登録・更新の調整。
 - `domain/product.rs`：商品型、入力型、必須項目・価格の検証と空白正規化。
 - `infrastructure/db/connection.rs`：保存先作成・接続・foreign_keys・5秒busy timeout。

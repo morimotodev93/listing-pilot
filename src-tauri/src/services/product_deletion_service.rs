@@ -5,7 +5,10 @@ use crate::{
     },
     error::AppError,
     infrastructure::{
-        db::{Database, image_repository as images, product_repository as products},
+        db::{
+            Database, attribute_value_repository as values, image_repository as images,
+            product_repository as products,
+        },
         media_storage::MediaStorage,
     },
 };
@@ -31,6 +34,7 @@ pub fn preview(database: &Database, product_id: &str) -> Result<ProductDeletePre
             updated_at: product.updated_at.clone(),
             image_count: current.len(),
             image_ids: current.into_iter().map(|image| image.id).collect(),
+            attribute_values: values::list(&transaction, product_id)?,
             product,
         };
         transaction.commit()?;
@@ -78,6 +82,9 @@ pub fn delete(
         let product = products::get(&transaction, &input.product_id).map_err(stale_missing)?;
         let current = images::list(&transaction, &input.product_id)?;
         validate(input, &product, &current)?;
+        if values::list(&transaction, &input.product_id)? != input.expected_attribute_values {
+            return Err(AppError::StaleData);
+        }
         transaction.commit()?;
         Ok(current)
     })?;
@@ -90,9 +97,17 @@ pub fn delete(
         let product = products::get(&transaction, &input.product_id).map_err(stale_missing)?;
         let current = images::list(&transaction, &input.product_id)?;
         validate(input, &product, &current)?;
+        if values::list(&transaction, &input.product_id)? != input.expected_attribute_values {
+            return Err(AppError::StaleData);
+        }
         if current != checked {
             return Err(AppError::StaleData);
         }
+        values::delete_product(
+            &transaction,
+            &input.product_id,
+            input.expected_attribute_values.len(),
+        )?;
         for image in &current {
             images::delete(&transaction, &input.product_id, &image.id)?;
         }
@@ -103,7 +118,13 @@ pub fn delete(
         }
         Ok(transaction.commit().map_err(AppError::from))
     })?;
-    resolve_commit(database, &input.product_id, &checked, commit)?;
+    resolve_commit(
+        database,
+        &input.product_id,
+        &checked,
+        &input.expected_attribute_values,
+        commit,
+    )?;
     let mut report = DeleteImageReport {
         deleted: true,
         affected_image_count: checked.len(),
@@ -134,7 +155,7 @@ fn has_references(
     product_id: &str,
     checked: &[ProductImage],
 ) -> Result<bool, AppError> {
-    let exists: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM products WHERE id = ?1) OR EXISTS(SELECT 1 FROM product_images WHERE product_id = ?1)", [product_id], |row| row.get(0))?;
+    let exists: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM products WHERE id = ?1) OR EXISTS(SELECT 1 FROM product_images WHERE product_id = ?1) OR EXISTS(SELECT 1 FROM product_attribute_values WHERE product_id = ?1)", [product_id], |row| row.get(0))?;
     if exists {
         return Ok(true);
     }
@@ -150,6 +171,7 @@ pub(crate) fn resolve_commit(
     database: &Database,
     product_id: &str,
     checked: &[ProductImage],
+    checked_values: &[crate::domain::attribute_value::ProductAttributeValue],
     commit: Result<(), AppError>,
 ) -> Result<(), AppError> {
     if let Err(error) = commit {
@@ -164,7 +186,9 @@ pub(crate) fn resolve_commit(
                 // A full rollback is a normal DB error; partial or reassigned
                 // references need an explicit restart/state-check instruction.
                 products::get(&transaction, product_id)?;
-                if images::list(&transaction, product_id)? != checked {
+                if images::list(&transaction, product_id)? != checked
+                    || values::list(&transaction, product_id)? != checked_values
+                {
                     return Err(AppError::ProductDeletionUnknown);
                 }
             }

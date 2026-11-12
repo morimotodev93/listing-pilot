@@ -1755,6 +1755,7 @@ fn product_delete_input(fixture: &Fixture) -> crate::domain::product::DeleteProd
         expected_updated_at: preview.updated_at,
         expected_image_ids: preview.image_ids,
         expected_product: preview.product,
+        expected_attribute_values: preview.attribute_values,
     }
 }
 fn delete_product(
@@ -2014,7 +2015,7 @@ fn schema_two_startup_migration_keeps_registered_images_and_original_bytes() {
 }
 
 #[test]
-fn attribute_values_restrict_product_delete_and_preserve_product_images_bytes_after_restart() {
+fn attribute_value_delete_failure_preserves_product_images_bytes_after_restart() {
     use crate::{domain::attribute::CreateAttributeInput, services::attribute_service};
     let fixture = Fixture::new();
     fixture.import_distinct(40, 2);
@@ -2048,6 +2049,7 @@ fn attribute_values_restrict_product_delete_and_preserve_product_images_bytes_af
             )
         })
         .unwrap();
+    fixture.db.with(|db| { db.execute_batch("CREATE TRIGGER fail_value_delete BEFORE DELETE ON product_attribute_values BEGIN SELECT RAISE(ABORT, 'injected'); END")?; Ok(()) }).unwrap();
     let expected = product_delete_input(&fixture);
     assert_eq!(
         delete_product(&fixture, &expected),
@@ -2148,6 +2150,7 @@ fn product_delete_commit_resolution_checks_product_all_ids_paths_and_unknown_sta
             &f.db,
             &f.product.id,
             &before,
+            &[],
             Err(AppError::DatabaseOperation),
         )
     };
@@ -2411,4 +2414,220 @@ fn product_delete_rejects_source_reparse_point_and_retains_destination_reparse_p
         }
         fs::remove_dir(link).unwrap();
     }
+}
+
+// Phase 4.2: values participate in deletion snapshots, rollback and commit resolution.
+fn seed_attribute_values(f: &Fixture) -> crate::domain::attribute::AttributeDefinition {
+    f.db.with(|db| {
+        let a = crate::services::attribute_service::create(
+            db,
+            crate::domain::attribute::CreateAttributeInput {
+                name: "素材".into(),
+                data_type: "text".into(),
+                unit: None,
+            },
+        )?;
+        crate::infrastructure::db::attribute_value_repository::set(
+            db,
+            &f.product.id,
+            &a.id,
+            Some("陶器"),
+        )?;
+        Ok(a)
+    })
+    .unwrap()
+}
+#[test]
+fn product_delete_values_archived_and_images_preserves_other_product_and_definitions() {
+    for count in [0, 2] {
+        let f = Fixture::new();
+        f.import_distinct(40, count);
+        let images = f.ordered();
+        let a = seed_attribute_values(&f);
+        let other =
+            f.db.with(|db| {
+                let p = product_service::create(db, input("other-values"))?;
+                crate::infrastructure::db::attribute_value_repository::set(
+                    db,
+                    &p.id,
+                    &a.id,
+                    Some("他商品"),
+                )?;
+                crate::services::attribute_service::set_archived(
+                    db,
+                    crate::domain::attribute::SetAttributeArchivedInput {
+                        id: a.id.clone(),
+                        archived: true,
+                        expected_updated_at: a.updated_at.clone(),
+                    },
+                )?;
+                Ok(p)
+            })
+            .unwrap();
+        let expected = product_delete_input(&f);
+        assert_eq!(expected.expected_attribute_values.len(), 1);
+        let report = delete_product(&f, &expected).unwrap();
+        assert!(report.deleted);
+        assert_eq!(report.affected_image_count, count as usize);
+        f.db.with(|db| {
+            assert!(
+                crate::infrastructure::db::attribute_value_repository::list(db, &f.product.id)?
+                    .is_empty()
+            );
+            assert_eq!(
+                crate::infrastructure::db::attribute_value_repository::list(db, &other.id)?[0]
+                    .value,
+                "他商品"
+            );
+            assert!(
+                crate::infrastructure::db::attribute_repository::get(db, &a.id)?
+                    .archived_at
+                    .is_some()
+            );
+            Ok(())
+        })
+        .unwrap();
+        for i in &images {
+            assert!(deleted_path(&f, i).exists());
+        }
+    }
+}
+#[test]
+fn product_delete_rejects_value_add_change_remove_without_updated_product_token() {
+    for action in ["add", "change", "remove"] {
+        let f = Fixture::new();
+        f.import_distinct(40, 1);
+        let images = f.ordered();
+        let a = seed_attribute_values(&f);
+        let expected = product_delete_input(&f);
+        f.db.with(|db| {
+            match action {
+                "add" => {
+                    let b = crate::services::attribute_service::create(
+                        db,
+                        crate::domain::attribute::CreateAttributeInput {
+                            name: "追加".into(),
+                            data_type: "text".into(),
+                            unit: None,
+                        },
+                    )?;
+                    crate::infrastructure::db::attribute_value_repository::set(
+                        db,
+                        &f.product.id,
+                        &b.id,
+                        Some("x"),
+                    )?;
+                }
+                "change" => crate::infrastructure::db::attribute_value_repository::set(
+                    db,
+                    &f.product.id,
+                    &a.id,
+                    Some("変更"),
+                )?,
+                _ => crate::infrastructure::db::attribute_value_repository::set(
+                    db,
+                    &f.product.id,
+                    &a.id,
+                    None,
+                )?,
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(delete_product(&f, &expected), Err(AppError::StaleData));
+        assert_eq!(f.ordered(), images);
+        for i in &images {
+            assert!(f.media.preview(i).is_some());
+        }
+    }
+}
+#[test]
+fn product_delete_definition_rename_does_not_invalidate_value_snapshot() {
+    let f = Fixture::new();
+    let a = seed_attribute_values(&f);
+    let expected = product_delete_input(&f);
+    f.db.with(|db| {
+        crate::services::attribute_service::update(
+            db,
+            crate::domain::attribute::UpdateAttributeInput {
+                id: a.id,
+                name: "名称変更".into(),
+                expected_updated_at: a.updated_at,
+            },
+        )
+    })
+    .unwrap();
+    assert!(delete_product(&f, &expected).unwrap().deleted);
+}
+#[test]
+fn product_delete_late_failure_restores_deleted_values_and_images() {
+    let f = Fixture::new();
+    f.import_distinct(40, 2);
+    seed_attribute_values(&f);
+    let expected = product_delete_input(&f);
+    let images = f.ordered();
+    f.db.with(|db| {db.execute_batch("CREATE TRIGGER fail_product_values BEFORE DELETE ON products BEGIN SELECT RAISE(ABORT,'injected'); END")?;Ok(())}).unwrap();
+    assert_eq!(
+        delete_product(&f, &expected),
+        Err(AppError::DatabaseOperation)
+    );
+    assert_eq!(f.ordered(), images);
+    f.db.with(|db| {
+        assert_eq!(
+            crate::infrastructure::db::attribute_value_repository::list(db, &f.product.id)?,
+            expected.expected_attribute_values
+        );
+        Ok(())
+    })
+    .unwrap();
+    for i in &images {
+        assert!(f.media.preview(i).is_some());
+    }
+}
+#[test]
+fn product_delete_commit_unknown_checks_value_references_and_full_rollback() {
+    let f = Fixture::new();
+    f.import_distinct(40, 1);
+    let a = seed_attribute_values(&f);
+    let images = f.ordered();
+    let expected = product_delete_input(&f);
+    let resolve = || {
+        crate::services::product_deletion_service::resolve_commit(
+            &f.db,
+            &f.product.id,
+            &images,
+            &expected.expected_attribute_values,
+            Err(AppError::DatabaseOperation),
+        )
+    };
+    assert_eq!(resolve(), Err(AppError::DatabaseOperation));
+    f.db.with(|db| {
+        crate::infrastructure::db::attribute_value_repository::set(
+            db,
+            &f.product.id,
+            &a.id,
+            Some("変更"),
+        )
+    })
+    .unwrap();
+    assert_eq!(resolve(), Err(AppError::ProductDeletionUnknown));
+    f.db.with(|db| {
+        db.pragma_update(None, "foreign_keys", false)?;
+        db.execute(
+            "DELETE FROM product_images WHERE product_id=?1",
+            [&f.product.id],
+        )?;
+        db.execute("DELETE FROM products WHERE id=?1", [&f.product.id])?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(resolve(), Err(AppError::ProductDeletionUnknown)); // orphan value still prohibits quarantine
+    f.db.with(|db| {
+        crate::infrastructure::db::attribute_value_repository::delete_product(db, &f.product.id, 1)
+    })
+    .unwrap();
+    assert_eq!(resolve(), Ok(()));
+    for i in &images {
+        assert!(f.media.preview(i).is_some());
+    } // resolver itself never moves files
 }

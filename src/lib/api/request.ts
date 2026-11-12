@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const messages: Record<string, string> = {
   required_field: "SKUと商品名を入力してください。",
+  invalid_attribute_value: "カスタム値を確認してください。Textは2,000文字以内で改行・制御文字は使えません。Numberは整数15桁・小数6桁以内の半角数字で入力してください。",
   invalid_attribute_definition: "項目名は1〜80文字、単位は20文字以内で入力し、改行・制御文字は使わないでください。単位はNumber項目だけに設定できます。",
   duplicate_attribute_name: "この項目名はすでに登録されています。非表示の項目も確認し、別の名前を入力してください。",
   attribute_not_found: "項目が見つかりません。項目一覧を再読み込みして確認してください。",
@@ -19,7 +20,7 @@ const messages: Record<string, string> = {
   image_deletion_unknown: "画像の削除結果を確認できませんでした。ファイルは保護のため保持しています。アプリを再起動して状態を確認してください。",
   product_deletion_unknown: "商品の削除結果を確認できませんでした。管理画像は保護のため保持しています。アプリを再起動して商品と画像の状態を確認してください。",
   invalid_image_order: "画像の並び順が不正です。画像を再読み込みしてからお試しください。",
-  stale_data: "商品または画像が変更・削除されています。最新の内容を読み込み、確認し直してください。",
+  stale_data: "商品・画像またはカスタム項目が変更・削除されています。最新の内容を読み込み、確認し直してください。",
   file_read: "画像ファイルを読み取れませんでした。アクセス権やファイルの状態を確認してください。",
   file_save: "画像を保存できませんでした。空き容量や保存先のアクセス権を確認してください。",
   unsafe_media_path: "安全性を確認できないファイルや保存先のため、画像の処理を中止しました。",

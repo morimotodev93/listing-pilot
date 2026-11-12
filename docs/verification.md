@@ -1,5 +1,85 @@
 # 開発環境の検証結果
 
+## Phase 4.2 商品別カスタム値（2026-11-12 日本時間）
+
+開始HEADは `7671e89`、作業ツリーはクリーン。スキーマ3と0001〜0003、依存／lockfile、
+通常の保存先・識別子・CSP・Capabilities・Asset Protocol・メディアOSロックは変更していない。
+設計は [ADR 0007](decisions/0007-product-attribute-values.md)。Commit・Push・ステージングは行っていない。
+テストは専用メモリDB／UUID付き一時DBとmedia、実アプリは新設 `.verification/phase42/` のみを使用。
+本番LocalData・既存fixture・過去の検証結果は使用・削除していない。
+
+### 自動検証（最終ソース編集後）
+
+| コマンド | 結果 |
+| --- | --- |
+| `npm run build` | 終了コード0、TypeScript・Vite成功（Release生成内でも成功） |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了コード0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了コード0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了コード0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了コード0、110 passed / 0 failed / 0 ignored、main/doc-testは各0件 |
+| `npm run tauri build -- --no-bundle --config .verification/phase42/run3/dev-config.json` | 終了コード0、保存先のみ隔離したRelease生成、Rust release 2分33秒 |
+| `npm run tauri build` | 終了コード0、通常設定のWindows Release・MSI・NSIS生成、Rust release 2分21秒 |
+| `git diff --check` | 終了コード0 |
+
+既存98件を維持し、値7件・商品削除5件を追加した。Phase 4.1の「値のFKで商品削除を拒否」テストは、
+今回の値削除対応に合わせて値DELETEへのABORT障害注入へ変更し、商品・画像・非表示値・画像バイト列の
+ロールバックと再起動後保持の検証を維持している。画像単体削除などの回帰テストも成功。
+
+- 値：2,000 Unicode文字境界、trim、改行・制御文字、整数／小数／負数／0、桁数境界、不正形式、
+  先頭ゼロ・小数末尾ゼロ・精度、未設定と0、ファイルDB再接続。
+- 保存：商品と複数値の作成／更新、値だけの更新による商品トークン更新、対象だけの空欄削除、
+  未指定・非表示値の保持、定義変更／非表示／復元、商品／定義競合、重複／不在／対象外ID、
+  値の途中SQL失敗で作成・更新全体をロールバック、旧APIと空編集対象で既存値を保持。
+- 削除：値0件、値あり画像0／2枚、非表示値、他商品・共通定義の保持、商品トークンを変えない
+  直接SQLによる値追加／変更／削除も検出、定義名変更だけは削除可能、値削除後の失敗で全件復元、
+  COMMIT不明時の全値照合・孤立値参照・不明状態での画像保持。
+
+### 実WebView2・実IPC・SQLite
+
+`npm run tauri dev -- --config .verification/phase42/run3/dev-config.json` で起動し、
+AppLocalData解決IPCが `run3/data` と一致することを操作前に確認した。
+アプリコードは通常版と共通。障害注入の2ケースを除き、実Rust IPCを使用している。
+専用Releaseでも同じ保存先を使用し、本番CSPの応答にunsafe-inline／unsafe-evalがないことを確認した。
+
+| 操作 | 観測結果 |
+| --- | --- |
+| 新規登録・詳細表示 | Text／Number／単位を表示。Textの00123、負数と小数の表記を保持。2回連続submitで商品1件 |
+| 編集・空欄 | Numberの0保存と初期表示、不正な1e3の拒否、空白へ戻した対象値だけを削除 |
+| 非表示・復元 | 実IPCで定義を非表示にし、通常フォームから除外。別項目保存後も陶器を保持、復元後に再表示 |
+| 定義競合 | フォーム開始後の名前変更を拒否し、入力を保持・保存ボタン停止。新規登録の定義競合も商品を作成しない |
+| 商品競合 | 別の実IPC更新後の保存を拒否し、入力した商品名を保持 |
+| 読込失敗 | get_product_edit_snapshotのエラー応答をfetchで注入し、fieldsetと保存を停止。空値として保存しない |
+| 保存後の取得失敗 | 実更新後のlist_products応答だけをエラー注入。保存成功通知と取得エラーを表示、更新IPCは1回。復旧後の一覧再取得で正常反映 |
+| 旧API | attributeValuesを省略した実update_product後も全値が一致 |
+| 画像 | 新規32×24 PNG2枚をRustネイティブダイアログで選択。表示・並べ替え・削除キャンセル／確定、SHA-256一致。商品スナップショットは不変 |
+| 開発版再起動 | 商品・定義・全値が完全一致し、画像の順序・表示も維持 |
+| Release起動・削除 | 高精度文字列と単位を表示。値3件の確認／キャンセル／削除に成功、他商品の値・共通定義3件を保持 |
+| Releaseの画像保護 | 商品削除後の隔離画像を含むPNG2枚のSHA-256が元の2枚と一致 |
+| Release二重起動 | 同じ保存先・同じWebView2引数の2個目で項目管理4 API、商品一覧・編集snapshot・削除previewの計7 APIがmedia_busy |
+
+最終停止後の専用DBはschema=3、integrity_check=ok、foreign_key_check=0行。
+対象商品と画像登録は削除済み、他商品1件・その値1件・共通定義3件を保持。
+`images` / `restart` / `release` 区間でJavaScript例外・コンソールエラー・CSP違反0件。
+値の操作区間も全操作assertionとJS例外／コンソールエラー0件の確認まで通過したが、初回のCSP監視変数が
+未初期化で最終集計assertionが失敗した。監視変数を初期化後、後続3区間は全assertion成功。
+値操作区間全体のCSPイベント計測成功とは主張しない。
+
+初回Viteはsandboxのspawn EPERM。同じコマンドを制限外で再実行して成功し、コードや権限は緩めていない。
+追加テストの初回はPowerShellパイプの文字コードを修正して再実行した。
+UIスクリプトはキャンセル後の戻り先、Tauriの書換え不可invokeへの障害注入、CSP監視初期化を修正した。
+各試行の記録を保持し、新設run3で上記操作を実行した。WebViewキャッシュへのwatcher EBUSY警告は継続。
+二重起動の初回は異なるdebug引数でWebView2が応答せず、同じ引数で再検証して成功した。
+通常終了要求後も残った当該検証プロセスだけは絶対パスとPIDを照合して終了した。
+検証中の画像・DBの完全削除や再初期化は行っていない。
+
+通常設定のReleaseは生成のみで起動していない。検証用プロセスはすべて終了した。
+通常EXE・MSI・NSIS・隔離ReleaseのサイズとSHA-256は `run3/build-artifacts.json` に保存した。
+最終Git状態は変更19ファイル・新規未追跡5ファイル。ステージ済み変更はない。
+
+ローカル証跡：`.verification/phase42/run3/` の `smoke.mjs`、`blocked.mjs`、`*-result.json`、
+`*-data-check.json`、`detail.png`、`final-release.png`。恒久的CI UIテストではない。
+インストーラーの導入・上書き更新・アンインストール、別PC、電源断・実ディスク故障は未検証。
+
 ## Phase 4.1 共通カスタム商品項目（2026-11-12 日本時間）
 
 開始時は `main / a3080010222cc2082bde773e22c6500d738a1eb7`、作業ツリーはクリーン。

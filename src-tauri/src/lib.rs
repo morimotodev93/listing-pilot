@@ -7,6 +7,8 @@ mod services;
 #[cfg(test)]
 mod attribute_tests;
 #[cfg(test)]
+mod attribute_value_tests;
+#[cfg(test)]
 mod image_tests;
 #[cfg(test)]
 mod tests;
@@ -46,6 +48,7 @@ pub fn run() {
             commands::attribute::set_attribute_archived,
             commands::product::list_products,
             commands::product::get_product,
+            commands::product::get_product_edit_snapshot,
             commands::product::create_product,
             commands::product::update_product,
             commands::product::get_product_delete_preview,
