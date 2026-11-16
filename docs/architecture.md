@@ -3,6 +3,15 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
+## Phase 4.4 出品プレビュー
+
+ProductDetail / ListingPreview → lib/api/listingPreview.ts → commands/listing_preview.rs →
+listing_preview_service → 既存の各DB Repository / MediaStorage::preview。
+サービスが共通メディアpermitを取得し、単一読取トランザクションで商品・画像・定義・値を取得する。
+DB Mutex解放後に画像の安全性を検査し、出品候補・Issue・準備状況を返す。
+Reactは表示と画面遷移だけを担当し、検証ロジックを重複させない。再読込では全情報を取得し直す。
+読取専用・スキーマ4を維持する。契約と検査の限界は [ADR 0009](decisions/0009-listing-preview.md) を参照。
+
 ## Phase 4.3 公開用文章
 
 ProductForm / ProductDetail → lib/api/products.ts → commands/product.rs → product_service →

@@ -19,3 +19,4 @@ async fn execute<T: Send + 'static>(
         .map_err(|_| AppError::DatabaseOperation)?
 }
 pub mod attribute;
+pub mod listing_preview;

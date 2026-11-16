@@ -55,3 +55,8 @@ button.product-link:hover:not(:disabled) { background: transparent; color: #132f
   gap: 8px;
   padding: 0 12px 12px;
 }
+.listing-images { display: flex; flex-wrap: wrap; gap: 1rem; align-items: start; }
+.listing-image { margin: 0; width: 160px; }
+.listing-main-image { width: 300px; max-width: 100%; }
+.listing-image img { width: 100%; height: 160px; object-fit: contain; }
+.listing-main-image img { height: 300px; }

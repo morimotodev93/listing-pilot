@@ -3,12 +3,14 @@ import { deleteProduct, getProductDeletePreview, getProductEditSnapshot } from "
 import type { DeleteProductReport, ProductDeletePreview } from "../../../lib/api/products";
 import type { Product, ProductEditSnapshot } from "../types";
 import { ProductImages } from "./ProductImages";
+import { ListingPreview } from "./ListingPreview";
 
 type Props = { product: Product; onBack: () => void; onEdit: () => void; onDeleted: (report: DeleteProductReport) => void };
 const yen = new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY" });
 const date = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" });
 
 export function ProductDetail({ product: initialProduct, onBack, onEdit, onDeleted }: Props) {
+  const [showListing, setShowListing] = useState(false);
   const [snapshot, setSnapshot] = useState<ProductEditSnapshot | null>(null);
   const [valueError, setValueError] = useState("");
   const product = snapshot?.product ?? initialProduct;
@@ -55,10 +57,12 @@ export function ProductDetail({ product: initialProduct, onBack, onEdit, onDelet
       setError(error instanceof Error ? error.message : "商品を削除できませんでした。内容を確認し直してください。");
     } finally { operation.current = false; setBusy(false); setDeleting(false); }
   }
+  if (showListing) return <ListingPreview productId={product.id} onBack={() => setShowListing(false)} onEdit={onEdit} />;
   return <section className="panel" aria-labelledby="detail-heading">
     <div className="section-heading">
       <div><h2 id="detail-heading">{product.name}</h2><p className="muted">商品詳細</p></div>
       <div className="detail-actions">
+        <button type="button" className="secondary" disabled={locked} onClick={() => { if (!operation.current && !imageBusy.current && !preview) setShowListing(true); }}>出品プレビュー</button>
         <button type="button" className="secondary" disabled={locked} onClick={() => { if (!operation.current && !imageBusy.current && !preview) onBack(); }}>一覧へ戻る</button>
         <button type="button" disabled={locked} onClick={() => { if (!operation.current && !imageBusy.current && !preview) onEdit(); }}>商品を編集</button>
         <button type="button" className="secondary" disabled={locked} onClick={() => void askDelete()}>商品を削除</button>

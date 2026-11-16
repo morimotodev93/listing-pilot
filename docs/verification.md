@@ -1,5 +1,83 @@
 # 開発環境の検証結果
 
+## Phase 4.4 出品プレビュー・入力検証（2026-11-16 日本時間）
+
+開始HEADは `59546b1`、開始時の作業ツリーはクリーン。
+読取専用の候補生成サービス・DTO・IPC・React画面を追加し、商品詳細から開けるようにした。
+スキーマVersion 4を維持し、Migration・依存・lockfile・識別子・通常保存先・CSP・権限を変更していない。
+設計契約は [ADR 0009](decisions/0009-listing-preview.md) を参照。
+
+### 自動チェック
+
+| コマンド（リポジトリルートから実行） | 結果 |
+|---|---|
+| `npm run build` | 最終のAPI修正後に成功。TypeScript両設定とVite本番ビルド成功 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 成功、終了コード0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 成功、終了コード0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 成功、終了コード0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 125 passed / 0 failed / 0 ignored。既存120件と専用5件 |
+| `git diff --check` | 成功、終了コード0 |
+
+Rustの最終編集後に上記Rustチェックを実施。以後のソース修正はフロントエンドAPIの取得共有だけで、
+その修正後にnpmビルドと実WebView2検証を実施した。
+Viteの初回はサンドボックスの子プロセス起動制限でspawn EPERMとなり、同一コマンドを
+承認済みの通常権限で実行して成功。アプリの依存や設定による回避はしていない。
+
+専用Rustテストではタイトル出典・決定的な警告順序・ready/warning/blocked・公開説明文の改行・
+価格0・内部メモの非公開・有効値だけの抽出・小数と単位の保持・定義名変更と復元・
+画像順序と再読込・欠落／危険なパス・商品不在・DB部分読取失敗を確認した。
+生成前後の全4テーブルの行、商品更新日時、元画像バイト列の不変とスキーマ4も確認した。
+メディアpermit取得中のプレビューは取得エラーとなり、解放後は再取得できる。
+既存のメディア競合、リンク／junction拒否、再起動時整合性、Phase 4.1〜4.3の回帰テストも成功。
+
+### 実WebView2（隔離した開発版）
+
+`npm run tauri dev -- --config .verification/phase44/dev-config-2.json` で起動し、
+appDirectoriesOverrideで専用データ領域を指定。実IPCで解決した保存先が専用領域であることを
+検証スクリプトで照合してから、作成・編集・画像取り込み・削除を行った。通常データは使用していない。
+CDPはローカルポート9364を使用。検証後に開発プロセスを停止した。
+
+- 商品詳細からの遷移、タイトル未設定時の管理名候補とtitle_fallbackを含む4警告を確認。
+- プレビューに内部メモが含まれず、Numberの001.230000と単位cmが保持されることを確認。
+- プレビューから編集し、公開用タイトル・説明文・価格を保存して再表示。説明文のpre-wrapを確認。
+- カスタム項目を非表示にした後、再読み込みで値が除外されることを確認。
+- 既存のネイティブダイアログと実IPCで2画像を取り込み、readyと実画像デコード成功を確認。
+- 並べ替え後の再読み込みで先頭のメイン画像が変わること、商品更新日時に依存しないことを確認。
+- 繰り返し取得前後の編集スナップショットが完全一致することを確認。
+- DOMのerrorイベントを送ってブラウザー側読込失敗のプレースホルダーを確認し、再読み込みで復帰。
+  このケースはイベントによるシミュレーションであり、破損画像の実デコード失敗を再現したものではない。
+- 新規に取り込んだ専用画像を検証領域に退避して欠落を再現。blocked、image_unavailable、
+  画像ごとのプレースホルダーを確認し、退避した画像を戻してreadyへ復帰。
+- 商品詳細への復帰、既存の画像削除IPC、商品削除の確認UIからの確定を確認。
+- 追加の専用商品をプレビュー表示中に削除し、再読み込みでproduct_not_foundを表示。
+  古いタイトル・準備状況が残らないことを確認。
+- 最終の2スクリプトともJavaScript例外0件、CSP違反0件。
+
+初回の実画面検証ではStrictModeの初回Effect再実行による二重取得がmedia_busyとなった。
+API層で同一商品の進行中Promiseだけを共有し、完了後は破棄する修正で解消。
+新しい専用保存先で最初から再検証して成功した。
+Git対象外の `.verification/phase44/result.json` と `reload-result.json` に成功結果、
+同ディレクトリの初回失敗記録と検証スクリプトに再現手順を保持する。
+開発用watcherにはWebView2キャッシュのEBUSY通知が出たが、実IPCと画面検証は成功した。
+
+### 検査の限界・未実施事項
+
+画像確認は既存の安全なパス検証と通常ファイルのopenまでで、全件SHA-256再計算・全件再デコードはしない。
+アプリのメディア変更はpermitで排他するが、同一ユーザーの外部プログラムによる検査後の改変まで保証しない。
+DB読取失敗はRust専用テストで確認し、実WebView2の取得失敗表示には商品不在を使用した。
+今回の本番CSP下のRelease画面操作、`npm run tauri build`、インストーラー、別PC、電源断は未実施。
+Phase 4.5では最新データを再取得し、出力に必要な画像完全性検証を追加する必要がある。
+
+### 変更ファイルとGit
+
+- Rust新規：domain/listing_preview.rs、services/listing_preview_service.rs、commands/listing_preview.rs、listing_preview_tests.rs。
+- Rust登録更新：domain/mod.rs、services/mod.rs、commands/mod.rs、lib.rs。
+- React/API新規：ListingPreview.tsx、listingPreviewTypes.ts、lib/api/listingPreview.ts。
+- 既存UI更新：ProductDetail.tsx、products.css。
+- 文書：README.md、architecture.md、verification.md、decisions/0009-listing-preview.md。
+
+計17ファイル。ステージング・commit・pushは行っていない。検証成果物は既存のGit除外を維持。
+
 ## Phase 4.3 公開用タイトル・説明文（2026-11-12 日本時間）
 
 開始HEADは `64d25ec`、作業ツリーはクリーン。Migration 0004でスキーマ4へ移行する。
