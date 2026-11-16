@@ -68,9 +68,27 @@ fn product(db: &Connection) -> crate::domain::product::Product {
             brand: Some("ブランド".into()),
             price_yen: Some(1200),
             description_note: Some("説明\nメモ".into()),
+            listing_title: Default::default(),
+            listing_description: Default::default(),
         },
     )
     .unwrap()
+}
+fn legacy_product(db: &Connection) -> crate::domain::product::Product {
+    let p = crate::domain::product::Product {
+        id: uuid::Uuid::new_v4().to_string(),
+        sku: "SKU".into(),
+        name: "商品".into(),
+        brand: Some("ブランド".into()),
+        price_yen: Some(1200),
+        description_note: Some("説明\nメモ".into()),
+        listing_title: None,
+        listing_description: None,
+        created_at: "2026-01-01T00:00:00Z".into(),
+        updated_at: "2026-01-01T00:00:00Z".into(),
+    };
+    db.execute("INSERT INTO products (id, sku, name, brand, price_yen, description_note, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![p.id, p.sku, p.name, p.brand, p.price_yen, p.description_note, p.created_at, p.updated_at]).unwrap();
+    p
 }
 fn version(db: &Connection) -> i64 {
     db.pragma_query_value(None, "user_version", |row| row.get(0))
@@ -86,7 +104,7 @@ fn schema(db: &Connection) -> Vec<(String, String)> {
 }
 
 #[test]
-fn migrate_zero_one_two_to_three_preserves_every_product_and_image_column() {
+fn migrate_zero_one_two_to_four_preserves_every_product_and_image_column() {
     for initial in 0..=2 {
         let temp = Temp::new();
         let mut db = Connection::open(temp.0.join("test.sqlite3")).unwrap();
@@ -94,7 +112,7 @@ fn migrate_zero_one_two_to_three_preserves_every_product_and_image_column() {
         let before = if initial >= 1 {
             db.execute_batch(include_str!("../migrations/0001_create_products.sql"))
                 .unwrap();
-            Some(product(&db))
+            Some(legacy_product(&db))
         } else {
             None
         };
@@ -110,7 +128,7 @@ fn migrate_zero_one_two_to_three_preserves_every_product_and_image_column() {
         };
         db.pragma_update(None, "user_version", initial).unwrap();
         migrations::apply(&mut db).unwrap();
-        assert_eq!(version(&db), 3);
+        assert_eq!(version(&db), 4);
         if let Some(before) = before {
             assert_eq!(product_service::get(&db, &before.id).unwrap(), before);
         }
@@ -138,7 +156,7 @@ fn migration_three_failure_rolls_back_all_intermediate_schema_and_existing_data(
         let before = if initial >= 1 {
             db.execute_batch(include_str!("../migrations/0001_create_products.sql"))
                 .unwrap();
-            Some(product(&db))
+            Some(legacy_product(&db))
         } else {
             None
         };
@@ -160,13 +178,20 @@ fn migration_three_failure_rolls_back_all_intermediate_schema_and_existing_data(
             "keep"
         );
         if let Some(before) = before {
-            assert_eq!(product_service::get(&db, &before.id).unwrap(), before);
+            let note: String = db
+                .query_row(
+                    "SELECT description_note FROM products WHERE id = ?1",
+                    [&before.id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(Some(note), before.description_note);
         }
     }
 }
 
 #[test]
-fn version_three_reapply_restart_and_future_version_rejection_preserve_data() {
+fn version_four_reapply_restart_and_future_version_rejection_preserve_data() {
     let temp = Temp::new();
     let path = temp.0.join("test.sqlite3");
     let (p, attribute, original_schema) = {
@@ -185,7 +210,7 @@ fn version_three_reapply_restart_and_future_version_rejection_preserve_data() {
         (p, attribute, original_schema)
     };
     let mut db = connection::open(&path).unwrap();
-    assert_eq!(version(&db), 3);
+    assert_eq!(version(&db), 4);
     assert_eq!(repository::get(&db, &attribute.id).unwrap(), attribute);
     assert_eq!(product_service::get(&db, &p.id).unwrap(), p);
     assert_eq!(
@@ -196,7 +221,7 @@ fn version_three_reapply_restart_and_future_version_rejection_preserve_data() {
         .unwrap(),
         "12345678901234567890.0123456789"
     );
-    for newer in [4, 99] {
+    for newer in [5, 99] {
         db.pragma_update(None, "user_version", newer).unwrap();
         assert!(migrations::apply(&mut db).is_err());
         assert_eq!(version(&db), newer);

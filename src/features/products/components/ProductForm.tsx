@@ -12,6 +12,8 @@ export function ProductForm({ product, onSaved, onCancel }: Props) {
   const [brand, setBrand] = useState(product?.brand ?? "");
   const [price, setPrice] = useState(product?.price_yen?.toString() ?? "");
   const [note, setNote] = useState(product?.description_note ?? "");
+  const [listingTitle, setListingTitle] = useState(product?.listing_title ?? "");
+  const [listingDescription, setListingDescription] = useState(product?.listing_description ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const submitting = useRef(false);
@@ -31,6 +33,7 @@ export function ProductForm({ product, onSaved, onCancel }: Props) {
           const p = snapshot.product;
           setSku(p.sku); setName(p.name); setBrand(p.brand ?? "");
           setPrice(p.price_yen?.toString() ?? ""); setNote(p.description_note ?? "");
+          setListingTitle(p.listing_title ?? ""); setListingDescription(p.listing_description ?? "");
           setExpectedUpdatedAt(p.updated_at); setDefinitions(snapshot.definitions.filter(a => !a.archivedAt));
           setValues(Object.fromEntries(snapshot.values.map(v => [v.attributeId, v.value])));
         } else {
@@ -57,7 +60,8 @@ export function ProductForm({ product, onSaved, onCancel }: Props) {
     }
     submitting.current = true; setSaving(true);
     try {
-      const input = { sku, name, brand: brand || null, price_yen: priceText ? Number(priceText) : null, description_note: note || null };
+      const input = { sku, name, brand: brand || null, price_yen: priceText ? Number(priceText) : null, description_note: note || null,
+        listing_title: listingTitle || null, listing_description: listingDescription || null };
       const attributeValues = {
         editableDefinitions: definitions.map(a => ({ attributeId: a.id, expectedUpdatedAt: a.updatedAt })),
         values: definitions.map(a => ({ attributeId: a.id, value: values[a.id] ?? "" })),
@@ -89,7 +93,16 @@ export function ProductForm({ product, onSaved, onCancel }: Props) {
       <input id="price" inputMode="numeric" value={price} onChange={e => setPrice(e.target.value)} aria-describedby="price-help" />
       <small id="price-help">任意・0以上の整数。未入力は価格未設定になります。</small>
       <label htmlFor="note">説明メモ</label>
-      <textarea id="note" rows={5} value={note} onChange={e => setNote(e.target.value)} />
+      <textarea id="note" rows={5} value={note} onChange={e => setNote(e.target.value)} aria-describedby="note-help" />
+      <small id="note-help">内部管理用・公開用説明文には自動転記されません。</small>
+      <h3>EC掲載用の文章</h3>
+      <label htmlFor="listing-title">公開用タイトル</label>
+      <input id="listing-title" value={listingTitle} onChange={e => setListingTitle(e.target.value)} aria-describedby="listing-title-help listing-title-status" />
+      <small id="listing-title-help">任意・200文字以内。改行・制御文字は使えません。</small>
+      <small id="listing-title-status">{listingTitle.trim() ? "公開用タイトルを設定しています。" : "未設定。未入力の場合、将来の出品データ生成では管理用の商品名を候補として使用します。"}</small>
+      <label htmlFor="listing-description">公開用説明文</label>
+      <textarea id="listing-description" rows={8} value={listingDescription} onChange={e => setListingDescription(e.target.value)} aria-describedby="listing-description-help" />
+      <small id="listing-description-help">任意・10,000文字以内。複数行とタブを使用できます。プレーンテキストとして保存します。</small>
       <h3>カスタム商品項目</h3>
       {ready && definitions.length === 0 && <p className="muted">カスタム項目設定から項目を追加できます。</p>}
       {definitions.map(a => <div key={a.id}>

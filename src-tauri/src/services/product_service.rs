@@ -35,6 +35,8 @@ pub fn create_with_values(
         brand: input.brand,
         price_yen: input.price_yen,
         description_note: input.description_note,
+        listing_title: input.listing_title.resolve(None),
+        listing_description: input.listing_description.resolve(None),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -81,6 +83,10 @@ pub fn update_with_values(
         brand: input.brand,
         price_yen: input.price_yen,
         description_note: input.description_note,
+        listing_title: input.listing_title.resolve(previous.listing_title),
+        listing_description: input
+            .listing_description
+            .resolve(previous.listing_description),
         created_at: previous.created_at,
         updated_at: Utc::now()
             .max(next)

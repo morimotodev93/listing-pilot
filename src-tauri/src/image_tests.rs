@@ -345,13 +345,20 @@ fn input(sku: &str) -> ProductInput {
         brand: None,
         price_yen: None,
         description_note: None,
+        listing_title: Default::default(),
+        listing_description: Default::default(),
     }
 }
 impl Fixture {
     fn new() -> Self {
         let temp = Temp::new();
         let connection = connection::open(&temp.0.join("test.sqlite3")).unwrap();
-        let product = product_service::create(&connection, input("image-test")).unwrap();
+        let mut data = input("image-test");
+        data.listing_title =
+            crate::domain::product::ListingTextInput::Provided(Some("公開名".into()));
+        data.listing_description =
+            crate::domain::product::ListingTextInput::Provided(Some("公開説明\n二行目".into()));
+        let product = product_service::create(&connection, data).unwrap();
         let db = Database(Arc::new(Mutex::new(Ok(connection))));
         let media = MediaStorage::open(&temp.0.join("media")).unwrap();
         Self {
@@ -389,7 +396,15 @@ fn migration_zero_one_two_and_existing_product_preservation() {
             db.execute_batch(include_str!("../migrations/0001_create_products.sql"))
                 .unwrap();
             db.pragma_update(None, "user_version", 1).unwrap();
-            let product = product_service::create(&db, input("preserved")).unwrap();
+            let product: crate::domain::product::Product =
+                serde_json::from_value(serde_json::json!({
+                    "id": uuid::Uuid::new_v4().to_string(), "sku":"preserved", "name":"画像テスト",
+                    "brand":null,"price_yen":null,"description_note":null,
+                    "listing_title":null,"listing_description":null,
+                    "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"
+                }))
+                .unwrap();
+            db.execute("INSERT INTO products (id, sku, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)", rusqlite::params![product.id, product.sku, product.name, product.created_at, product.updated_at]).unwrap();
             if version == 2 {
                 db.execute_batch(include_str!("../migrations/0002_create_product_images.sql"))
                     .unwrap();
@@ -403,7 +418,7 @@ fn migration_zero_one_two_and_existing_product_preservation() {
         assert_eq!(
             db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            3
+            4
         );
         assert!(repository::all(&db).unwrap().is_empty());
         if let Some(product) = product {
@@ -418,7 +433,7 @@ fn migration_two_failure_rolls_back_schema_and_keeps_version_one() {
     db.execute_batch(include_str!("../migrations/0001_create_products.sql"))
         .unwrap();
     db.pragma_update(None, "user_version", 1).unwrap();
-    let product = product_service::create(&db, input("keep")).unwrap();
+    db.execute_batch("INSERT INTO products (id, sku, name, created_at, updated_at) VALUES ('keep', 'keep', '画像テスト', 'created', 'updated');").unwrap();
     // Force failure after CREATE TABLE has succeeded.
     db.execute_batch("CREATE INDEX idx_product_images_product_order ON products(id)")
         .unwrap();
@@ -429,7 +444,13 @@ fn migration_two_failure_rolls_back_schema_and_keeps_version_one() {
         1
     );
     assert!(db.prepare("SELECT * FROM product_images").is_err());
-    assert_eq!(product_service::get(&db, &product.id).unwrap(), product);
+    assert_eq!(
+        db.query_row("SELECT name FROM products WHERE id = 'keep'", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .unwrap(),
+        "画像テスト"
+    );
 }
 
 #[test]
@@ -1846,7 +1867,15 @@ fn product_delete_zero_one_four_images_preserves_sources_other_product_and_resta
 
 #[test]
 fn product_delete_rejects_stale_timestamp_and_same_timestamp_product_changes() {
-    for column in ["updated_at", "name", "sku", "brand", "description_note"] {
+    for column in [
+        "updated_at",
+        "name",
+        "sku",
+        "brand",
+        "description_note",
+        "listing_title",
+        "listing_description",
+    ] {
         let f = Fixture::new();
         f.import_distinct(0, 2);
         let expected = product_delete_input(&f);
@@ -1983,11 +2012,13 @@ fn schema_two_startup_migration_keeps_registered_images_and_original_bytes() {
         .collect();
     // Reproduce the exact pre-4.1 schema inside this dedicated temporary fixture.
     fixture.db.with(|db| {
-        db.execute_batch("DROP TABLE product_attribute_values; DROP TABLE attribute_definitions; PRAGMA user_version = 2;")?;
+        db.execute_batch("DROP TABLE product_attribute_values; DROP TABLE attribute_definitions; ALTER TABLE products DROP COLUMN listing_title; ALTER TABLE products DROP COLUMN listing_description; PRAGMA user_version = 2;")?;
         Ok(())
     }).unwrap();
     let directory = fixture.temp.0.clone();
-    let product = fixture.product.clone();
+    let mut product = fixture.product.clone();
+    product.listing_title = None;
+    product.listing_description = None;
     drop(fixture.db);
     drop(fixture.media);
     fs::rename(
@@ -1999,7 +2030,7 @@ fn schema_two_startup_migration_keeps_registered_images_and_original_bytes() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
     assert_eq!(product_service::get(&db, &product.id).unwrap(), product);
     assert_eq!(repository::list(&db, &product.id).unwrap(), images);

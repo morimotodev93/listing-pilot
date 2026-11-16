@@ -19,6 +19,8 @@ fn input(sku: &str) -> ProductInput {
         brand: None,
         price_yen: None,
         description_note: None,
+        listing_title: Default::default(),
+        listing_description: Default::default(),
     }
 }
 fn definition(db: &Connection, name: &str, kind: &str) -> AttributeDefinition {
@@ -273,19 +275,31 @@ fn sql_failure_after_first_value_rolls_back_create_and_update() {
     let db = db();
     let a = definition(&db, "a", "text");
     let b = definition(&db, "b", "number");
-    let p =
-        products::create_with_values(&db, input("a"), Some(payload(&[(&a, "keep"), (&b, "0")])))
-            .unwrap();
+    let mut original = input("a");
+    original.listing_title = ListingTextInput::Provided(Some("公開名".into()));
+    original.listing_description = ListingTextInput::Provided(Some("公開説明".into()));
+    let p = products::create_with_values(&db, original, Some(payload(&[(&a, "keep"), (&b, "0")])))
+        .unwrap();
     db.execute_batch(&format!("CREATE TRIGGER fail_value BEFORE INSERT ON product_attribute_values WHEN NEW.attribute_id='{}' BEGIN SELECT RAISE(ABORT,'injected'); END",b.id)).unwrap();
     let before = values::list(&db, &p.id).unwrap();
+    let mut changed = input("changed-sku");
+    changed.name = "基本情報変更".into();
+    changed.listing_title = ListingTextInput::Provided(None);
+    changed.listing_description = ListingTextInput::Provided(Some("変更後".into()));
     assert_eq!(
-        update(&db, &p, Some(payload(&[(&a, "changed"), (&b, "1")]))),
+        products::update_with_values(
+            &db,
+            &p.id,
+            changed.clone(),
+            &p.updated_at,
+            Some(payload(&[(&a, "changed"), (&b, "1")]))
+        ),
         Err(AppError::DatabaseOperation)
     );
     assert_eq!(products::get(&db, &p.id).unwrap(), p);
     assert_eq!(values::list(&db, &p.id).unwrap(), before);
     assert_eq!(
-        products::create_with_values(&db, input("fail"), Some(payload(&[(&a, "new"), (&b, "1")]))),
+        products::create_with_values(&db, changed, Some(payload(&[(&a, "new"), (&b, "1")]))),
         Err(AppError::DatabaseOperation)
     );
     assert_eq!(products::list(&db).unwrap(), vec![p]);
@@ -316,7 +330,7 @@ fn restart_preserves_decimal_text_and_schema_three() {
         assert_eq!(
             db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            3
+            4
         );
     }
     std::fs::remove_file(path).unwrap();

@@ -8,6 +8,8 @@ const messages: Record<string, string> = {
   attribute_not_found: "項目が見つかりません。項目一覧を再読み込みして確認してください。",
   duplicate_sku: "このSKUはすでに登録されています。別のSKUを入力してください。",
   invalid_price: "価格は0〜9,007,199,254,740,991円の整数で入力してください。",
+  invalid_listing_title: "公開用タイトルは200文字以内で入力し、改行・制御文字は使わないでください。",
+  invalid_listing_description: "公開用説明文は10,000文字以内で入力してください。改行・タブ以外の制御文字は使えません。",
   product_not_found: "商品が見つかりません。一覧を再読み込みしてください。",
   database_operation: "データの読み書きに失敗しました。時間をおいて再度お試しください。",
   database_initialization: "データベースを初期化できませんでした。保存先のアクセス権や空き容量を確認し、アプリを再起動してください。",

@@ -1,6 +1,6 @@
-# 商品データモデル（Phase 4.1）
+# 商品データモデル（Phase 4.3）
 
-現在のスキーマは3。0003で共通項目定義と将来用の値テーブルを追加する。
+現在のスキーマは4。0003で共通項目定義と値テーブル、0004で公開用文章の2列を追加する。
 既存商品・画像の列・バイト列・参照は変更しない。以下のPhase 3.xに関する「追加しない」は当時の変更範囲を示す。
 
 商品編集は既存の `updated_at` を楽観ロックのトークンとして使用します。
@@ -42,6 +42,8 @@ COMMIT結果の確認不能時は成功を返さず、管理画像を動かし�
 | brand | TEXT | 任意。空白のみならNULL |
 | price_yen | INTEGER | 任意。0〜9,007,199,254,740,991の整数円 |
 | description_note | TEXT | 任意。前後空白を除去し空ならNULL |
+| listing_title | TEXT | 任意。Rust trim後最大200 Unicode文字。改行・制御文字はtrim前に拒否。空はNULL |
+| listing_description | TEXT | 任意。CRLF→LF、Rust trim後最大10,000 Unicode文字。LF・タブ以外の制御文字を拒否。空はNULL |
 | created_at | TEXT | NOT NULL。Rust生成のUTC RFC3339日時（Z）。更新時に保持 |
 | updated_at | TEXT | NOT NULL。Rust生成のUTC RFC3339日時（Z）。更新ごとに再設定 |
 
@@ -52,7 +54,10 @@ DBではNOT NULL / UNIQUE / CHECKを使い、価格の整数型と範囲も防�
 未入力の価格と0円は区別します。浮動小数点数による価格計算はありません。
 UIはIntl APIで円とOSのローカルタイムゾーンの日時を表示します。
 
-DDLの正本は `src-tauri/migrations/0001_create_products.sql` です。
+DDLの正本は `src-tauri/migrations/0001_create_products.sql` と `0004_add_listing_content.sql` です。
+公開用文章はname・description_noteから自動転記しません。旧API更新で省略した新フィールドは保持し、
+明示的NULLでのみ解除します。新規作成の省略はNULLです。検証と改行正規化はRustで行います。
+詳細は [ADR 0008](decisions/0008-listing-content.md) を参照してください。
 商品UUIDを画像テーブルの外部キーとして利用します。ジョブのテーブルはまだありません。
 
 ## product_images
@@ -90,8 +95,8 @@ Windowsでは通常 `%LOCALAPPDATA%\com.listingpilot.app\listing-pilot.sqlite3`�
 初回のみ保存先とDBを作成します。既存ファイルは保持し、初期化失敗を通知します。
 各接続でforeign_keys=ON、busy_timeout=5秒を設定します。
 
-`PRAGMA user_version` が0なら、IMMEDIATEトランザクション内で0001→0002→0003とバージョン3まで適用します。
-1なら0002→0003、2なら0003を適用し、3なら変更しません。4以上は初期化エラーにし、既存データを変更しません。
+`PRAGMA user_version` が0なら、IMMEDIATEトランザクション内で0001→0002→0003→0004とバージョン4まで適用します。
+1なら0002以降、2なら0003以降、3なら0004を適用し、4なら変更しません。5以上は初期化エラーにし、既存データを変更しません。
 失敗時はDDLとバージョン更新をロールバックします。将来の変更は番号付きSQLを追加し、
 同じトランザクション内で順に適用する方式を拡張します。適用済みのSQLは変更しません。
 
@@ -152,5 +157,5 @@ Textはtrim後最大2,000 Unicode文字、制御文字・改行禁止。Number�
 旧APIでattributeValuesを省略すると既存値に触れない。商品と各定義の更新日時で競合を検出する。
 商品削除は全値のスナップショットを確認・再検証後、対象商品IDの値だけを画像・商品と同じトランザクションで削除する。
 共通定義・他商品の値を保持し、COMMIT結果不明時はカスタム値参照も再照会して画像を保護する。
-スキーマ3と既存マイグレーションは変更しない。
+Phase 4.2ではスキーマ3と既存マイグレーションを維持した。Phase 4.3での追加はADR 0008を参照。
 詳細は [ADR 0007](decisions/0007-product-attribute-values.md) を参照。

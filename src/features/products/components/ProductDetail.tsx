@@ -72,6 +72,11 @@ export function ProductDetail({ product: initialProduct, onBack, onEdit, onDelet
       <dt>登録日時</dt><dd><time dateTime={product.created_at}>{date.format(new Date(product.created_at))}</time></dd>
       <dt>更新日時</dt><dd><time dateTime={product.updated_at}>{date.format(new Date(product.updated_at))}</time></dd>
     </dl>
+    <h3>EC掲載用の文章</h3>
+    <dl className="product-information">
+      <dt>公開用タイトル</dt><dd className="product-note">{product.listing_title ?? "未設定"}</dd>
+      <dt>公開用説明文</dt><dd className="product-note">{product.listing_description ?? "未設定"}</dd>
+    </dl>
     <h3>カスタム商品項目</h3>
     {valueError ? <p className="error" role="alert">{valueError} 一覧へ戻って開き直してください。</p> : !snapshot ? <p role="status">読み込んでいます…</p> :
       <dl className="product-information">{snapshot.definitions.filter(a => !a.archivedAt).map(a => {

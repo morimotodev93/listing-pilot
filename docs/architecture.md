@@ -3,6 +3,15 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
+## Phase 4.3 公開用文章
+
+ProductForm / ProductDetail → lib/api/products.ts → commands/product.rs → product_service →
+product_repositoryの既存経路を拡張する。スキーマは4。公開用タイトルと説明文は管理名・内部メモとは独立する。
+domain/product.rsのListingTextInputが省略・明示的NULL・文字列を区別し、Rustで検証・正規化する。
+更新時の省略値は既存のIMMEDIATE内で解決し、商品・公開文章・カスタム値を一括保存する。
+削除スナップショットは拡張したProductの完全比較をそのまま使用し、画像処理は変更しない。
+詳細は [ADR 0008](decisions/0008-listing-content.md) を参照。
+
 ## Phase 4.2 商品別カスタム値
 
 ProductForm / ProductDetail → lib/api/products.ts → commands/product.rs → product_service /
@@ -16,7 +25,7 @@ attribute_value_service → attribute_value_repository の経路で、商品と�
 商品削除は全カスタム値をプレビュー・事前照合・IMMEDIATE再照合に含める。
 対象商品IDの値DELETE（件数照合）→画像DELETE→商品DELETE→残存参照検査→COMMIT→画像隔離の順。
 COMMIT失敗後の参照再照会にも値を含め、状態不明時は画像を保持する。
-スキーマ3、メディアpermit・OSロック、CSP・権限を維持する。詳細は [ADR 0007](decisions/0007-product-attribute-values.md)。
+Phase 4.2時点のスキーマは3。メディアpermit・OSロック、CSP・権限を維持する。詳細は [ADR 0007](decisions/0007-product-attribute-values.md)。
 
 ## React
 

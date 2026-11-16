@@ -10,6 +10,8 @@ pub enum AppError {
     AttributeNotFound,
     DuplicateSku,
     InvalidPrice,
+    InvalidListingTitle,
+    InvalidListingDescription,
     ProductNotFound,
     DatabaseOperation,
     DatabaseInitialization,

@@ -11,6 +11,8 @@ mod attribute_value_tests;
 #[cfg(test)]
 mod image_tests;
 #[cfg(test)]
+mod listing_content_tests;
+#[cfg(test)]
 mod tests;
 
 use std::sync::{Arc, Mutex};

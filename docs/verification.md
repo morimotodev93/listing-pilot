@@ -1,5 +1,78 @@
 # 開発環境の検証結果
 
+## Phase 4.3 公開用タイトル・説明文（2026-11-12 日本時間）
+
+開始HEADは `64d25ec`、作業ツリーはクリーン。Migration 0004でスキーマ4へ移行する。
+既存0001〜0003、通常保存先・識別子・CSP・Capabilities・Asset Protocol・メディア処理は変更していない。
+JSON入力契約のテスト用にserde_jsonをdev-dependenciesへ追加した。既存lock内の版を使い、
+Cargo.lockの変更はlisting-pilotの直接依存一覧1行のみ。npm依存・lockfileは変更していない。
+設計は [ADR 0008](decisions/0008-listing-content.md)。ステージング・Commit・Pushは行っていない。
+
+### 自動検証（最終ソース編集後）
+
+環境：Windows x64、Node 24.16.0 / npm 11.13.0、Rust / Cargo 1.99.1 stable MSVC。
+Rustコマンドは既存キャッシュを使う `--offline` でも成功した。
+
+| コマンド | 結果 |
+| --- | --- |
+| `npm run build` | 終了コード0、TypeScript・Vite成功。最初のsandbox内実行はspawn EPERM、通常権限で同一コマンドを再実行して成功 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了コード0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml --offline` | 終了コード0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --offline --all-targets -- -D warnings` | 終了コード0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --offline` | 終了コード0、120 passed / 0 failed / 0 ignored、main/doc-testは各0件 |
+| `npm run tauri build` | 終了コード0、通常設定のWindows Release・MSI（3,665,920 bytes）・NSIS（2,630,352 bytes）生成。Rust release 2分38秒 |
+| `git diff --check` | 終了コード0 |
+
+配布ビルド内のTypeScript・Viteも成功。既存識別子末尾 `.app` のmacOS向け警告は残るが、
+Windows生成は成功した。識別子は変更していない。生成物のSHA-256を専用検証領域へ記録した。
+
+新規10件と既存110件を実行。旧スキーマ用テストのデータ準備は旧形式SQLに変更し、
+現行Repositoryが未追加列へアクセスすることを避けた。直接書き込み制約のテストは列名を明示し、
+列数不一致だけで成功扱いにならないようにした。
+
+- 移行：0〜3から4、再適用・ファイルDB再接続、5／99拒否、0004の2番目のALTER失敗による
+  1番目のALTER・中間スキーマ・user_versionの全体ロールバック、既存商品全列・画像全列・定義・値の保持。
+  foreign_key_check空、integrity_checkはok。既存の実画像付きスキーマ2起動試験でも元バイト列を保持。
+- 入力：Unicodeスカラー値でタイトル200／201、説明10,000／10,001、前後空白、NULL化、
+  trim前の制御文字拒否、CRLF→LF、本文中のタブ・改行・HTML文字列の保持、Unicode非変換。
+- 互換性：Serdeで省略・NULL・文字列を区別し、不正JSON型を拒否。旧作成はNULL、旧更新は保持、
+  片方だけの更新・解除は他方を保持。管理名変更との独立、内部メモ非転記、再取得・再起動後の保持。
+- 保存：公開文章だけでも更新トークンを進める。競合・不正入力は全商品情報を保持。
+  カスタム値の途中SQL失敗で基本情報・公開文章・更新日時・全対象値を作成／更新ともロールバック。
+- 削除：共通画像fixtureに公開文章を持たせ、既存の画像／値付き削除、失敗・再起動、他商品と共通定義保持、
+  非置換隔離・COMMIT不明時の保護を回帰確認。更新日時を変えない2つの公開列の直接変更も古い確認として拒否。
+
+### 実WebView2・実IPC・SQLite
+
+`npm run tauri dev -- --config .verification/phase43/run2/dev-config.json` を使用。
+操作前にAppLocalData解決IPCが今回専用の `run2/data` と一致することを確認した。
+通常のLocalData、過去Phaseのデータ、既存fixtureは使用・変更・削除していない。
+実Rust IPCを使い、スナップショット取得失敗と保存後一覧取得失敗の2ケースのみ検証用fetch応答を注入した。
+
+| 操作 | 観測結果 |
+| --- | --- |
+| 新規登録・二重送信 | 管理名・内部メモ・公開文章・カスタム値を同時保存。連続submitでも1商品 |
+| 詳細・編集 | 公開文章の保存値を表示。説明文のLF・タブ・HTML文字列を保持し、pre-wrapで表示 |
+| 管理情報との分離 | 管理名だけ変更しても公開名を保持。内部メモを公開説明へ転記しない。未設定の入力欄は空で詳細は「未設定」 |
+| 境界・旧呼び出し | 絵文字201文字を拒否し入力を保持、200文字を保存。省略更新で両方保持、NULLで片方だけ解除、CRLFをLFへ変換 |
+| 同時編集・競合 | 公開文章とカスタム値を同時更新。古い商品トークンでは両文章とカスタム値の入力を保持し再保存を停止 |
+| 読み込み・再取得失敗 | スナップショット取得失敗では保存不可。保存後の一覧取得失敗では成功と取得エラーを併記し、更新IPCは1回 |
+| プロセス再起動 | Tauri終了→同じ専用設定で再起動。商品全フィールド・カスタム値スナップショットが一致。その後両文章の空白入力でNULL化 |
+| 画像・商品削除 | 今回生成したPNG2枚をネイティブダイアログで取り込み・表示・並べ替え。公開名変更後の旧削除確認はstale_data。最新のUI確認で商品・画像2枚・カスタム値1件を削除 |
+| 保持・整合性 | 他商品・共通定義を保持。隔離先PNG2枚のSHA-256がDBメタデータ・取り込み元と一致。最終DBはschema=4、画像0／値0／定義1、foreign_key_check空、integrity_check=ok |
+
+検証スクリプトのキャンセル後遷移想定を修正し、完了済み操作を保持して後続を再開した。
+削除後の画像一覧APIは空配列ではなくproduct_not_foundを返す既存仕様だったため、検証側の期待値を修正し、
+後続の保持・隔離検査を実行した。この期待値不一致によるCDP評価例外はアプリの通常操作の例外とは区別する。
+後続のresume／restart／deleted検証でJavaScript例外・コンソールエラー・CSP違反は各0件。
+Vite監視が専用WebView2のCookie等へEBUSYを出すことはあったが、起動・IPC・保存・再起動は成功した。
+結果JSON・画面・専用データはGit対象外の `.verification/phase43/` に保持している。
+検証用Tauri／Viteは終了し、Listing Pilotプロセスが残っていないことを確認した。
+
+今回の実操作は開発版WebView2。通常設定の配布EXE操作、本番CSP下の実操作、インストーラー導入・更新・削除、
+別PC、電源断・実ディスク故障は未検証。実ユーザーデータに対する移行は実施していない。
+利用前には全アプリを停止し、DBとmedia全体を一組でバックアップする。
+
 ## Phase 4.2 商品別カスタム値（2026-11-12 日本時間）
 
 開始HEADは `7671e89`、作業ツリーはクリーン。スキーマ3と0001〜0003、依存／lockfile、

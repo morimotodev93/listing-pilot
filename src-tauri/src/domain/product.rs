@@ -12,6 +12,8 @@ pub struct Product {
     pub brand: Option<String>,
     pub price_yen: Option<i64>,
     pub description_note: Option<String>,
+    pub listing_title: Option<String>,
+    pub listing_description: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -23,6 +25,58 @@ pub struct ProductInput {
     pub brand: Option<String>,
     pub price_yen: Option<i64>,
     pub description_note: Option<String>,
+    #[serde(default)]
+    pub listing_title: ListingTextInput,
+    #[serde(default)]
+    pub listing_description: ListingTextInput,
+}
+
+// A missing field preserves existing content; explicit null clears it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum ListingTextInput {
+    #[default]
+    Omitted,
+    Provided(Option<String>),
+}
+
+impl<'de> Deserialize<'de> for ListingTextInput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<String>::deserialize(deserializer).map(Self::Provided)
+    }
+}
+
+impl ListingTextInput {
+    pub fn resolve(self, previous: Option<String>) -> Option<String> {
+        match self {
+            Self::Omitted => previous,
+            Self::Provided(value) => value,
+        }
+    }
+
+    fn validate(self, multiline: bool) -> Result<Self, AppError> {
+        let Self::Provided(Some(value)) = self else {
+            return Ok(self);
+        };
+        let value = if multiline {
+            value.replace("\r\n", "\n")
+        } else {
+            value
+        };
+        // Inspect before trimming so controls at either end are also rejected.
+        // Descriptions allow LF and tab verbatim; lone CR is invalid.
+        if value.chars().any(|c| {
+            (c.is_control() && !(multiline && matches!(c, '\n' | '\t')))
+                || (!multiline && matches!(c, '\u{2028}' | '\u{2029}'))
+        }) || value.trim().chars().count() > if multiline { 10_000 } else { 200 }
+        {
+            return Err(if multiline {
+                AppError::InvalidListingDescription
+            } else {
+                AppError::InvalidListingTitle
+            });
+        }
+        Ok(Self::Provided(nonempty(value)))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,6 +116,8 @@ impl ProductInput {
         }
         self.brand = self.brand.and_then(nonempty);
         self.description_note = self.description_note.and_then(nonempty);
+        self.listing_title = self.listing_title.validate(false)?;
+        self.listing_description = self.listing_description.validate(true)?;
         Ok(self)
     }
 }
