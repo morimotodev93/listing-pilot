@@ -5,6 +5,9 @@ mod infrastructure;
 mod services;
 
 #[cfg(test)]
+mod attribute_group_tests;
+
+#[cfg(test)]
 mod attribute_tests;
 #[cfg(test)]
 mod attribute_value_tests;
@@ -48,6 +51,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::greet,
+            commands::attribute_group::list_attribute_groups,
+            commands::attribute_group::create_attribute_group,
+            commands::attribute_group::update_attribute_group,
+            commands::attribute_group::set_attribute_group_archived,
             commands::product_export::export_product,
             commands::listing_preview::get_listing_preview,
             commands::attribute::list_attribute_definitions,

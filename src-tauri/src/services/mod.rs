@@ -1,3 +1,4 @@
+pub mod attribute_group_service;
 pub mod attribute_service;
 pub mod attribute_value_service;
 pub mod image_service;

@@ -19,6 +19,7 @@ async fn execute<T: Send + 'static>(
         .map_err(|_| AppError::DatabaseOperation)?
 }
 pub mod attribute;
+pub mod attribute_group;
 pub mod listing_preview;
 
 pub mod product_export;

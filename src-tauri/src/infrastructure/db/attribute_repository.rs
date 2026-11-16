@@ -4,12 +4,13 @@ use crate::{
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-const COLUMNS: &str = "id, name, data_type, unit, archived_at, created_at, updated_at";
+const COLUMNS: &str = "id, name, data_type, unit, archived_at, created_at, updated_at, group_id";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<AttributeDefinition> {
     let data_type: String = row.get(2)?;
     Ok(AttributeDefinition {
         id: row.get(0)?,
+        group_id: row.get(7)?,
         name: row.get(1)?,
         data_type: AttributeDataType::parse(&data_type)
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
@@ -42,8 +43,8 @@ pub fn get(connection: &Connection, id: &str) -> Result<AttributeDefinition, App
 
 pub fn create(connection: &Connection, attribute: &AttributeDefinition) -> Result<(), AppError> {
     connection.execute(
-        "INSERT INTO attribute_definitions (id, name, data_type, unit, archived_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
-        params![attribute.id, attribute.name, attribute.data_type.as_str(), attribute.unit, attribute.created_at, attribute.updated_at],
+        "INSERT INTO attribute_definitions (id, name, data_type, unit, archived_at, created_at, updated_at, group_id) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
+        params![attribute.id, attribute.name, attribute.data_type.as_str(), attribute.unit, attribute.created_at, attribute.updated_at, attribute.group_id],
     )?;
     Ok(())
 }

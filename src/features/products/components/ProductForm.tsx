@@ -3,6 +3,7 @@ import { createProduct, updateProduct, getProductEditSnapshot } from "../../../l
 import { RequestError } from "../../../lib/api/request";
 import { listAttributeDefinitions } from "../../../lib/api/attributes";
 import type { AttributeDefinition } from "../../attributes/types";
+import { DEFAULT_GROUP_ID } from "../../attributes/types";
 import type { Product } from "../types";
 
 type Props = { product: Product | null; onSaved: () => void; onCancel: () => void };
@@ -39,7 +40,7 @@ export function ProductForm({ product, onSaved, onCancel }: Props) {
         } else {
           const items = await listAttributeDefinitions();
           if (!active) return;
-          setDefinitions(items.filter(a => !a.archivedAt));
+          setDefinitions(items.filter(a => a.groupId === DEFAULT_GROUP_ID && !a.archivedAt));
         }
         setReady(true);
       } catch (error: unknown) {

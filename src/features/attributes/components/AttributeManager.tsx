@@ -4,6 +4,7 @@ import {
 } from "../../../lib/api/attributes";
 import { RequestError } from "../../../lib/api/request";
 import type { AttributeDataType, AttributeDefinition } from "../types";
+import { DEFAULT_GROUP_ID } from "../types";
 import "../attributes.css";
 
 export function AttributeManager() {
@@ -27,7 +28,7 @@ export function AttributeManager() {
   useEffect(() => {
     let cancelled = false;
     listAttributeDefinitions().then(items => {
-      if (!cancelled) { setAttributes(items); setReady(true); }
+      if (!cancelled) { setAttributes(items.filter(a => a.groupId === DEFAULT_GROUP_ID)); setReady(true); }
     }).catch((error: unknown) => {
       if (!cancelled) setError(error instanceof Error ? error.message : "項目を取得できませんでした。");
     }).finally(() => { if (!cancelled) setLoading(false); });
@@ -39,7 +40,7 @@ export function AttributeManager() {
     operation.current = true;
     setLoading(true); setError(""); setNotice("");
     try {
-      setAttributes(await listAttributeDefinitions()); setReady(true); setEditor(null);
+      setAttributes((await listAttributeDefinitions()).filter(a => a.groupId === DEFAULT_GROUP_ID)); setReady(true); setEditor(null);
     } catch (error: unknown) {
       setReady(false); setError(error instanceof Error ? error.message : "項目を取得できませんでした。");
     } finally { operation.current = false; setLoading(false); }
@@ -55,7 +56,7 @@ export function AttributeManager() {
       // Re-read the canonical order; never retry a mutation on refresh failure.
       setReady(false);
       try {
-        setAttributes(await listAttributeDefinitions());
+        setAttributes((await listAttributeDefinitions()).filter(a => a.groupId === DEFAULT_GROUP_ID));
         setReady(true);
         onSaved?.();
       } catch {

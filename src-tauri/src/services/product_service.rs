@@ -27,9 +27,15 @@ pub fn create_with_values(
     let transaction =
         rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
     let input = input.validate()?;
+    let group_id = input
+        .group_id
+        .clone()
+        .unwrap_or_else(|| crate::domain::attribute_group::DEFAULT_GROUP_ID.to_owned());
+    super::attribute_group_service::require_active(&transaction, &group_id)?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
     let product = Product {
         id: Uuid::new_v4().to_string(),
+        group_id,
         sku: input.sku,
         name: input.name,
         brand: input.brand,
@@ -69,6 +75,14 @@ pub fn update_with_values(
         rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)?;
     let input = input.validate()?;
     let previous = repository::get(&transaction, id)?;
+    if previous.updated_at != expected_updated_at {
+        return Err(AppError::StaleData);
+    }
+    let group_id = input
+        .group_id
+        .clone()
+        .unwrap_or_else(|| previous.group_id.clone());
+    super::attribute_group_service::require_active(&transaction, &group_id)?;
     // Advance the token even if the system clock repeats or moves backwards.
     let previous_time = chrono::DateTime::parse_from_rfc3339(&previous.updated_at)
         .map_err(|_| AppError::DatabaseOperation)?
@@ -78,6 +92,7 @@ pub fn update_with_values(
         .ok_or(AppError::DatabaseOperation)?;
     let product = Product {
         id: previous.id,
+        group_id,
         sku: input.sku,
         name: input.name,
         brand: input.brand,
@@ -105,9 +120,15 @@ pub fn edit_snapshot(
     id: &str,
 ) -> Result<crate::domain::product::ProductEditSnapshot, AppError> {
     let transaction = connection.unchecked_transaction()?;
+    let product = repository::get(&transaction, id)?;
+    super::attribute_group_service::require_active(&transaction, &product.group_id)?;
+    let definitions = crate::infrastructure::db::attribute_repository::list(&transaction)?
+        .into_iter()
+        .filter(|d| d.group_id == product.group_id && d.archived_at.is_none())
+        .collect();
     let snapshot = crate::domain::product::ProductEditSnapshot {
-        product: repository::get(&transaction, id)?,
-        definitions: crate::infrastructure::db::attribute_repository::list(&transaction)?,
+        product,
+        definitions,
         values: crate::infrastructure::db::attribute_value_repository::list(&transaction, id)?,
     };
     transaction.commit()?;

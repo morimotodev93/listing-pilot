@@ -16,6 +16,7 @@ fn database() -> Connection {
 }
 fn input(sku: &str) -> ProductInput {
     ProductInput {
+        group_id: None,
         sku: sku.into(),
         name: "テスト商品".into(),
         brand: None,
@@ -186,7 +187,7 @@ fn repeated_migrations_preserve_data() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
 }
 #[test]
@@ -245,12 +246,12 @@ fn migration_failure_rolls_back_schema_and_version() {
 #[test]
 fn newer_schema_is_rejected_without_modification() {
     let mut db = database();
-    db.pragma_update(None, "user_version", 5).unwrap();
+    db.pragma_update(None, "user_version", 6).unwrap();
     assert!(migrations::apply(&mut db).is_err());
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
 }
 #[test]
@@ -278,7 +279,7 @@ fn schema_constraints_protect_direct_writes() {
     ] {
         assert!(
             db.execute(
-                "INSERT INTO products (id, sku, name, brand, price_yen, description_note, created_at, updated_at) VALUES ('id', ?1, ?2, NULL, ?3, NULL, 'utc', 'utc')",
+                "INSERT INTO products (group_id, id, sku, name, brand, price_yen, description_note, created_at, updated_at) VALUES ('7a8f0c3e-4d5b-4c6a-9e20-1234567890ab', 'id', ?1, ?2, NULL, ?3, NULL, 'utc', 'utc')",
                 rusqlite::params![sku, name, price]
             )
             .is_err()

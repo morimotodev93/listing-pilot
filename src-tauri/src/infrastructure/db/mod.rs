@@ -27,5 +27,6 @@ impl Database {
         operation(guard.as_ref().map_err(Clone::clone)?)
     }
 }
+pub mod attribute_group_repository;
 pub mod attribute_repository;
 pub mod attribute_value_repository;

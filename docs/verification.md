@@ -1,5 +1,73 @@
 # 開発環境の検証結果
 
+## Phase 4.5.1 グループ専用フィールド・Schema v5（2026-11-16 日本時間）
+
+基準HEADは `1f2dcc7`。着手時の作業ツリーはクリーン。契約と移行手順は
+[ADR 0011](decisions/0011-attribute-groups.md)。既存0001〜0004、依存ロック、アプリ識別子、
+CSP・Asset Protocol・Capabilities、メディア管理実装は変更していない。
+
+| 実行コマンド | 結果 |
+|---|---|
+| `npm run build` | 成功、終了0。TypeScript両設定とVite本番ビルド |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 成功、終了0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 成功、終了0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 成功、終了0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | **158件成功、失敗0・無視0**。既存146件＋グループ関連12件。main/doc-testは各0件 |
+| `npm run tauri build` | 成功、終了0。通常設定のWindows Release本体・MSI・NSISを生成（導入・起動は未実施） |
+| `git diff --check` | 成功、終了0。未追跡のMigration・Rust・ADRも別途確認 |
+
+### 自動テスト
+
+最初にMigration専用3テストを成功させ、その後保存・読取・出力を実装して全件を再確認した。
+テストは専用メモリDBまたは一意の一時DB・media・出力先を使用し、通常LocalDataは使用していない。
+
+- foreign_keys=ONでv0〜v4→v5、v5再実行、v6/将来版拒否。全既存列・ID、2商品×2定義の全値、
+  Numberの先頭ゼロ・小数文字列、非表示状態、画像メタデータと参照を保持。
+- 最終トリガー生成時に故意に失敗させ、コピー・旧テーブルDROP・RENAME後もDDL・値・商品・user_version全体が戻ることを確認。
+- 移行後のforeign_key_checkは0行、integrity_checkはok、foreign_keysは1。NULL・不在所属拒否、
+  グループ内の非表示項目を含む名前重複拒否、別グループの同名許可、定義所属の変更拒否。
+- グループの作成・決定的一覧・改名・名前検証・BINARY一意・競合・復元、既定/商品所属ありのアーカイブ拒否。
+- 商品作成時の既定、更新時の所属保持、所属変更前の値保持と元グループの値再利用。
+  別グループ項目の更新/クリア、変更後所属と不一致の旧項目、無効/不在所属を拒否。
+- 有効な値と不正項目が混在する保存、および途中SQL失敗で、商品・所属・更新日時・全対象値をロールバック。
+- 現在グループだけの編集候補・プレビュー・CSV。所属変更だけでも旧snapshotTokenを拒否。
+  グループ情報、定義所属、非表示状態がトークン比較に入ることを確認。
+- 全グループの値を含む削除確認、所属だけが変わった古い確認の拒否、全値の削除と定義保持。
+  既存画像取込・順序・削除・隔離、CSV列/BOM/CRLF/画像順/原本コピーの回帰も全件成功。
+
+### 実デスクトップ・再起動
+
+`npm run tauri dev` 相当のCLIを `--no-watch --config .verification/phase451/dev-config.json` で起動。
+保存先はappDirectoriesOverrideにより `.verification/phase451/data/` に隔離し、実IPCのPath応答でも一致を確認した。
+デバッグポート9366の実WebView2をCDPで操作し、モックは使用していない。
+
+- グループ4IPCの呼出しと、同名・古い更新日時・既定/使用中グループのアーカイブ拒否。
+- 既定グループを改名後、旧項目設定が既定の項目だけを表示すること。
+- 旧商品フォームから既定項目だけを新規保存。別グループ商品を開くとその所属の項目だけを表示・保存し、旧値と所属を保持。
+- 別グループ値のクリア拒否時に商品名も保存されないこと。競合時に商品名・値の入力が残り、保存ボタンが無効になること。
+- 所属切替・アーカイブ/復元後も両グループの値を保持し、旧プレビュートークンによる出力を拒否。
+- WindowsネイティブダイアログからPNGを取り込み、Asset Protocol経由で画像表示。
+  現在グループだけのプレビューと、専用のOS一時出力先へのCSV・原本出力に成功。
+- プロセスを停止して同じ隔離先で再起動。実IPCで所属、両グループの値2件、現在グループの候補1件、画像1枚を再取得し、画面表示も確認。
+- 最終成功セッションと再起動セッションでJavaScript例外・コンソールエラー0件。
+
+停止後の隔離DBを読取専用で確認し、user_version=5、foreign_key_check=0行、integrity_check=ok。
+保持値2件、管理画像1件のサイズ・SHA-256と原本バイトの一致を確認した。
+成果物はGit対象外の `.verification/phase451/` に保持した。開発プロセスとデバッグポートは停止済み。
+
+### 実行環境の制限と未検証
+
+Viteビルドとネイティブダイアログ補助プロセスはサンドボックスでspawn EPERMになり、同じ処理を通常権限で実行して成功した。
+リポジトリ配下の検証用出力先ではexport_write、OS一時フォルダーでは成功した。
+開発サーバーが同配下を監視している間、WebView2のCookies等にはEBUSYも記録された。
+監視による影響が疑われるが、export_writeの直接原因は断定していない。アプリコードの回避変更は加えていない。
+Tauri buildでは既存識別子末尾 `.app` のmacOS向け警告が出たが、Windowsの両パッケージ生成は成功し、識別子は維持した。
+
+通常LocalDataと実ユーザーデータの移行、通常設定Releaseの画面操作、インストーラー導入/更新/削除、
+別PC、電源断・ディスク故障は未検証。グループ管理・選択UIはPhase 4.5.2に残す。
+運用DBで初回起動する前に、全アプリを終了しDBとmedia全体を一組でバックアップすること。
+ステージング・Commit・Push・リリース公開は行っていない。
+
 ## Phase 4.5 商品1件のCSV・原本画像出力（2026-11-16 日本時間）
 
 基準HEADは `0d0a740`。着手時の作業ツリーはクリーン。スキーマVersion 4、既存Migration、依存ロック、

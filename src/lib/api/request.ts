@@ -1,6 +1,12 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const messages: Record<string, string> = {
+  invalid_attribute_group: "グループ名は1〜80文字で入力し、改行・制御文字は使わないでください。グループIDも確認してください。",
+  duplicate_attribute_group_name: "このグループ名はすでに登録されています。アーカイブ済みのグループも確認してください。",
+  attribute_group_not_found: "グループが見つかりません。最新情報を読み込み直してください。",
+  attribute_group_archived: "このグループはアーカイブされています。最新情報を読み込み直してください。",
+  default_attribute_group: "既定グループはアーカイブできません。",
+  attribute_group_in_use: "商品が所属しているグループはアーカイブできません。",
   export_blocked: "安全に読み取れない画像があります。問題を修正してプレビューを再読み込みしてください。",
   export_warning_required: "現在のプレビューの警告を確認してからエクスポートしてください。",
   csv_formula_risk: "CSVで数式として扱われる文字列があるため出力を中止しました。",

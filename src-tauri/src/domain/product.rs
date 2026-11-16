@@ -7,6 +7,7 @@ pub const MAX_PRICE_YEN: i64 = 9_007_199_254_740_991;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Product {
     pub id: String,
+    pub group_id: String,
     pub sku: String,
     pub name: String,
     pub brand: Option<String>,
@@ -20,6 +21,7 @@ pub struct Product {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProductInput {
+    pub group_id: Option<String>,
     pub sku: String,
     pub name: String,
     pub brand: Option<String>,

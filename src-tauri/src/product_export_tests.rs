@@ -102,7 +102,7 @@ impl Fixture {
                 }
                 assert_eq!(
                     db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
-                    4
+                    5
                 );
                 Ok(result)
             })
@@ -133,6 +133,96 @@ fn folder(report: ExportReport) -> PathBuf {
         } => folder.into(),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn group_switch_filters_shared_preview_csv_and_invalidates_previous_token() {
+    use crate::{
+        domain::{attribute::CreateAttributeInput, attribute_group::CreateAttributeGroupInput},
+        infrastructure::db::attribute_value_repository as values,
+        services::{attribute_group_service as groups, attribute_service as attributes},
+    };
+    let f = Fixture::new();
+    let (g, a, b) =
+        f.db.with(|db| {
+            let g = groups::create(db, CreateAttributeGroupInput { name: "PC".into() })?;
+            let mut input: CreateAttributeInput =
+                serde_json::from_value(json!({"name":"カラー","dataType":"text"})).unwrap();
+            let a = attributes::create(db, input)?;
+            input =
+                serde_json::from_value(json!({"name":"カラー","dataType":"text","groupId":g.id}))
+                    .unwrap();
+            let b = attributes::create(db, input)?;
+            // Values from previously selected groups may legitimately coexist.
+            values::set(db, &f.id, &a.id, Some("旧グループの値"))?;
+            values::set(db, &f.id, &b.id, Some("現在グループの値"))?;
+            Ok((g, a, b))
+        })
+        .unwrap();
+    let before = f.input();
+    let p = preview::get(&f.db, &f.media, &f.id).unwrap();
+    assert_eq!(p.attributes.len(), 1);
+    assert_eq!(p.attributes[0].attribute_id, a.id);
+    // Even an out-of-band membership change without changing updated_at must invalidate confirmation.
+    f.db.with(|db| {
+        db.execute(
+            "UPDATE products SET group_id=?1 WHERE id=?2",
+            rusqlite::params![g.id, f.id],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(f.run(&before), Err(AppError::StaleData)));
+    assert_eq!(fs::read_dir(&f.out).unwrap().count(), 0);
+    let p = preview::get(&f.db, &f.media, &f.id).unwrap();
+    assert_eq!(p.attributes.len(), 1);
+    assert_eq!(p.attributes[0].attribute_id, b.id);
+    let data = f.dump();
+    let csv =
+        fs::read_to_string(folder(f.run(&f.input()).unwrap()).join("attributes.csv")).unwrap();
+    assert!(csv.starts_with("\u{feff}product_id,attribute_id,name,value,unit\r\n"));
+    assert!(csv.contains("現在グループの値"));
+    assert!(!csv.contains("旧グループの値"));
+    assert!(!csv.contains(&a.id));
+    assert_eq!(f.dump(), data);
+}
+
+#[test]
+fn snapshot_token_covers_group_metadata_field_membership_and_archive_state() {
+    let f = Fixture::new();
+    let default = crate::domain::attribute_group::DEFAULT_GROUP_ID;
+    let id = Uuid::new_v4().to_string();
+    let other = Uuid::new_v4().to_string();
+    f.sql(&format!("INSERT INTO attribute_groups VALUES('{other}','PC',NULL,'c','u'); INSERT INTO attribute_definitions VALUES('{id}','素材','text',NULL,NULL,'c','u','{default}');"));
+    let snapshot = f.db.with(|db| preview::read(db, &f.id)).unwrap();
+    let token = preview::build(snapshot.clone(), &f.media).snapshot_token;
+    let mut changed_membership = snapshot.clone();
+    changed_membership.definitions[0].group_id = other.clone();
+    assert_ne!(
+        preview::build(changed_membership, &f.media).snapshot_token,
+        token
+    );
+    let mut changed_archive = snapshot;
+    changed_archive.group.archived_at = Some("archived".into());
+    assert_ne!(
+        preview::build(changed_archive, &f.media).snapshot_token,
+        token
+    );
+    let original = f.input();
+    f.sql(&format!(
+        "UPDATE attribute_groups SET name='共通' WHERE id='{default}'"
+    ));
+    assert!(matches!(f.run(&original), Err(AppError::StaleData)));
+    let original = f.input();
+    f.sql(&format!(
+        "UPDATE attribute_definitions SET archived_at='archived' WHERE id='{id}'"
+    ));
+    assert!(matches!(f.run(&original), Err(AppError::StaleData)));
+    let original = f.input();
+    // Simulate a changed definition belonging to another group; no value or product timestamp changes.
+    let another = Uuid::new_v4().to_string();
+    f.sql(&format!("INSERT INTO attribute_definitions VALUES('{another}','素材','text',NULL,NULL,'c','u','{other}');"));
+    assert!(matches!(f.run(&original), Err(AppError::StaleData)));
 }
 
 #[test]
@@ -214,7 +304,7 @@ fn numeric_precision_negative_values_and_archived_attributes() {
     let f = Fixture::new();
     let active = Uuid::new_v4().to_string();
     let archived = Uuid::new_v4().to_string();
-    f.sql(&format!("INSERT INTO attribute_definitions(id,name,data_type,unit,created_at,updated_at) VALUES('{active}','長さ','number','cm','now','now'); INSERT INTO attribute_definitions(id,name,data_type,archived_at,created_at,updated_at) VALUES('{archived}','非表示','text','now','now','now'); INSERT INTO product_attribute_values(product_id,attribute_id,value) VALUES('{}','{active}','-000123.450000'),('{}','{archived}','=danger');",f.id,f.id));
+    f.sql(&format!("INSERT INTO attribute_definitions(group_id,id,name,data_type,unit,created_at,updated_at) VALUES('7a8f0c3e-4d5b-4c6a-9e20-1234567890ab','{active}','長さ','number','cm','now','now'); INSERT INTO attribute_definitions(group_id,id,name,data_type,archived_at,created_at,updated_at) VALUES('7a8f0c3e-4d5b-4c6a-9e20-1234567890ab','{archived}','非表示','text','now','now','now'); INSERT INTO product_attribute_values(product_id,attribute_id,value) VALUES('{}','{active}','-000123.450000'),('{}','{archived}','=danger');",f.id,f.id));
     let before = f.dump();
     let path = folder(f.run(&f.input()).unwrap());
     let csv = fs::read_to_string(path.join("attributes.csv")).unwrap();
@@ -232,7 +322,7 @@ fn attribute_formula_columns_are_identified() {
     ] {
         let f = Fixture::new();
         let id = Uuid::new_v4();
-        f.sql(&format!("INSERT INTO attribute_definitions(id,name,data_type,unit,created_at,updated_at) VALUES('{id}','{name}','{kind}',{},'now','now'); INSERT INTO product_attribute_values(product_id,attribute_id,value) VALUES('{}','{id}','{value}');",unit.map(|s|format!("'{s}'")).unwrap_or("NULL".into()),f.id));
+        f.sql(&format!("INSERT INTO attribute_definitions(group_id,id,name,data_type,unit,created_at,updated_at) VALUES('7a8f0c3e-4d5b-4c6a-9e20-1234567890ab','{id}','{name}','{kind}',{},'now','now'); INSERT INTO product_attribute_values(product_id,attribute_id,value) VALUES('{}','{id}','{value}');",unit.map(|s|format!("'{s}'")).unwrap_or("NULL".into()),f.id));
         assert_eq!(
             f.run(&f.input()).unwrap_err(),
             AppError::CsvFormulaRisk {
@@ -303,7 +393,7 @@ fn changed_product_or_definition_or_value_invalidates_confirmation() {
     ] {
         let f = Fixture::new();
         let id = Uuid::new_v4();
-        f.sql(&format!("INSERT INTO attribute_definitions(id,name,data_type,created_at,updated_at) VALUES('{id}','項目','text','now','now'); INSERT INTO product_attribute_values(product_id,attribute_id,value) VALUES('{}','{id}','value')",f.id));
+        f.sql(&format!("INSERT INTO attribute_definitions(group_id,id,name,data_type,created_at,updated_at) VALUES('7a8f0c3e-4d5b-4c6a-9e20-1234567890ab','{id}','項目','text','now','now'); INSERT INTO product_attribute_values(product_id,attribute_id,value) VALUES('{}','{id}','value')",f.id));
         let input = f.input();
         f.sql(sql);
         assert_eq!(f.run(&input).unwrap_err(), AppError::StaleData);

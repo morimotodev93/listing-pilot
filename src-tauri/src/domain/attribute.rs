@@ -29,6 +29,7 @@ impl AttributeDataType {
 #[serde(rename_all = "camelCase")]
 pub struct AttributeDefinition {
     pub id: String,
+    pub group_id: String,
     pub name: String,
     pub data_type: AttributeDataType,
     pub unit: Option<String>,
@@ -40,6 +41,7 @@ pub struct AttributeDefinition {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateAttributeInput {
+    pub group_id: Option<String>,
     pub name: String,
     pub data_type: String,
     pub unit: Option<String>,

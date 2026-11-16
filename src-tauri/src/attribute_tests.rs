@@ -26,6 +26,7 @@ impl Drop for Temp {
 
 fn input(name: &str, data_type: &str, unit: Option<&str>) -> CreateAttributeInput {
     CreateAttributeInput {
+        group_id: None,
         name: name.into(),
         data_type: data_type.into(),
         unit: unit.map(str::to_owned),
@@ -63,6 +64,7 @@ fn product(db: &Connection) -> crate::domain::product::Product {
     product_service::create(
         db,
         ProductInput {
+            group_id: None,
             sku: "SKU".into(),
             name: "商品".into(),
             brand: Some("ブランド".into()),
@@ -76,6 +78,7 @@ fn product(db: &Connection) -> crate::domain::product::Product {
 }
 fn legacy_product(db: &Connection) -> crate::domain::product::Product {
     let p = crate::domain::product::Product {
+        group_id: crate::domain::attribute_group::DEFAULT_GROUP_ID.into(),
         id: uuid::Uuid::new_v4().to_string(),
         sku: "SKU".into(),
         name: "商品".into(),
@@ -104,7 +107,7 @@ fn schema(db: &Connection) -> Vec<(String, String)> {
 }
 
 #[test]
-fn migrate_zero_one_two_to_four_preserves_every_product_and_image_column() {
+fn migrate_zero_one_two_to_five_preserves_every_product_and_image_column() {
     for initial in 0..=2 {
         let temp = Temp::new();
         let mut db = Connection::open(temp.0.join("test.sqlite3")).unwrap();
@@ -128,7 +131,7 @@ fn migrate_zero_one_two_to_four_preserves_every_product_and_image_column() {
         };
         db.pragma_update(None, "user_version", initial).unwrap();
         migrations::apply(&mut db).unwrap();
-        assert_eq!(version(&db), 4);
+        assert_eq!(version(&db), 5);
         if let Some(before) = before {
             assert_eq!(product_service::get(&db, &before.id).unwrap(), before);
         }
@@ -191,7 +194,7 @@ fn migration_three_failure_rolls_back_all_intermediate_schema_and_existing_data(
 }
 
 #[test]
-fn version_four_reapply_restart_and_future_version_rejection_preserve_data() {
+fn version_five_reapply_restart_and_future_version_rejection_preserve_data() {
     let temp = Temp::new();
     let path = temp.0.join("test.sqlite3");
     let (p, attribute, original_schema) = {
@@ -210,7 +213,7 @@ fn version_four_reapply_restart_and_future_version_rejection_preserve_data() {
         (p, attribute, original_schema)
     };
     let mut db = connection::open(&path).unwrap();
-    assert_eq!(version(&db), 4);
+    assert_eq!(version(&db), 5);
     assert_eq!(repository::get(&db, &attribute.id).unwrap(), attribute);
     assert_eq!(product_service::get(&db, &p.id).unwrap(), p);
     assert_eq!(
@@ -221,7 +224,7 @@ fn version_four_reapply_restart_and_future_version_rejection_preserve_data() {
         .unwrap(),
         "12345678901234567890.0123456789"
     );
-    for newer in [5, 99] {
+    for newer in [6, 99] {
         db.pragma_update(None, "user_version", newer).unwrap();
         assert!(migrations::apply(&mut db).is_err());
         assert_eq!(version(&db), newer);
@@ -485,9 +488,9 @@ fn database_constraints_reject_invalid_definitions_orphan_duplicate_and_blank_va
         ("型", "bool", None),
         ("単位", "text", Some("g")),
     ] {
-        assert!(db.execute("INSERT INTO attribute_definitions VALUES ('invalid', ?1, ?2, ?3, NULL, 'utc', 'utc')", params![name, data_type, unit]).is_err());
+        assert!(db.execute("INSERT INTO attribute_definitions VALUES ('invalid', ?1, ?2, ?3, NULL, 'utc', 'utc', '7a8f0c3e-4d5b-4c6a-9e20-1234567890ab')", params![name, data_type, unit]).is_err());
     }
-    assert!(db.execute("INSERT INTO attribute_definitions VALUES ('duplicate', '色', 'text', NULL, NULL, 'utc', 'utc')", []).is_err());
+    assert!(db.execute("INSERT INTO attribute_definitions VALUES ('duplicate', '色', 'text', NULL, NULL, 'utc', 'utc', '7a8f0c3e-4d5b-4c6a-9e20-1234567890ab')", []).is_err());
     for (pid, aid, value) in [
         ("missing", a.id.as_str(), "赤"),
         (p.id.as_str(), "missing", "赤"),

@@ -134,7 +134,7 @@ fn fallback_warning_order_and_read_only_contract() {
     f.db.with(|db| {
         assert_eq!(
             db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
-            4
+            5
         );
         Ok(())
     })
@@ -199,7 +199,7 @@ fn ready_preserves_content_order_and_files_then_reload_detects_missing_and_unsaf
 fn active_values_preserve_decimal_and_current_definition_order_and_restore() {
     let f = Fixture::new();
     f.db.with(|db| {
-        db.execute_batch("INSERT INTO attribute_definitions VALUES ('b','寸法','number','cm',NULL,'1','1'), ('a','素材','text',NULL,NULL,'2','2'), ('c','未設定','text',NULL,NULL,'3','3'), ('d','非表示','text',NULL,'4','4','4');")?;
+        db.execute_batch("INSERT INTO attribute_definitions VALUES ('b','寸法','number','cm',NULL,'1','1','7a8f0c3e-4d5b-4c6a-9e20-1234567890ab'), ('a','素材','text',NULL,NULL,'2','2','7a8f0c3e-4d5b-4c6a-9e20-1234567890ab'), ('c','未設定','text',NULL,NULL,'3','3','7a8f0c3e-4d5b-4c6a-9e20-1234567890ab'), ('d','非表示','text',NULL,'4','4','4','7a8f0c3e-4d5b-4c6a-9e20-1234567890ab');")?;
         for (id, value) in [("b","001.230000"), ("a","陶器"), ("d","保持する値")] {
             db.execute("INSERT INTO product_attribute_values VALUES (?1,?2,?3)", rusqlite::params![f.product.id, id, value])?;
         } Ok(())

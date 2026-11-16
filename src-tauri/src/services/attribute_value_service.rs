@@ -14,6 +14,8 @@ pub fn save(
     product_id: &str,
     input: &AttributeValuesInput,
 ) -> Result<(), AppError> {
+    let product = crate::infrastructure::db::product_repository::get(connection, product_id)?;
+    super::attribute_group_service::require_active(connection, &product.group_id)?;
     let mut ids = HashSet::new();
     let mut supplied = HashSet::new();
     for value in &input.values {
@@ -27,6 +29,9 @@ pub fn save(
             return Err(AppError::InvalidAttributeValue);
         }
         let definition = definitions::get(connection, &target.attribute_id)?;
+        if definition.group_id != product.group_id {
+            return Err(AppError::InvalidAttributeValue);
+        }
         if definition.updated_at != target.expected_updated_at || definition.archived_at.is_some() {
             return Err(AppError::StaleData);
         }

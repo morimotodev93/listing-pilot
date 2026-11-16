@@ -13,6 +13,12 @@ pub enum AppError {
     ExportUnknown,
     RequiredField,
     InvalidAttributeDefinition,
+    InvalidAttributeGroup,
+    DuplicateAttributeGroupName,
+    AttributeGroupNotFound,
+    AttributeGroupArchived,
+    DefaultAttributeGroup,
+    AttributeGroupInUse,
     InvalidAttributeValue,
     DuplicateAttributeName,
     AttributeNotFound,
@@ -47,7 +53,11 @@ impl From<rusqlite::Error> for AppError {
         {
             match message.as_str() {
                 "UNIQUE constraint failed: products.sku" => return Self::DuplicateSku,
-                "UNIQUE constraint failed: attribute_definitions.name" => {
+                "UNIQUE constraint failed: attribute_groups.name" => {
+                    return Self::DuplicateAttributeGroupName;
+                }
+                "UNIQUE constraint failed: attribute_definitions.group_id, attribute_definitions.name" =>
+                {
                     return Self::DuplicateAttributeName;
                 }
                 _ => (),

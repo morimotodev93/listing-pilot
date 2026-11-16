@@ -340,6 +340,7 @@ fn reorder_uses_created_at_and_id_to_break_sort_order_ties() {
 }
 fn input(sku: &str) -> ProductInput {
     ProductInput {
+        group_id: None,
         sku: sku.into(),
         name: "画像テスト".into(),
         brand: None,
@@ -401,6 +402,7 @@ fn migration_zero_one_two_and_existing_product_preservation() {
                     "id": uuid::Uuid::new_v4().to_string(), "sku":"preserved", "name":"画像テスト",
                     "brand":null,"price_yen":null,"description_note":null,
                     "listing_title":null,"listing_description":null,
+                    "group_id":crate::domain::attribute_group::DEFAULT_GROUP_ID,
                     "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"
                 }))
                 .unwrap();
@@ -418,7 +420,7 @@ fn migration_zero_one_two_and_existing_product_preservation() {
         assert_eq!(
             db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            4
+            5
         );
         assert!(repository::all(&db).unwrap().is_empty());
         if let Some(product) = product {
@@ -2012,7 +2014,7 @@ fn schema_two_startup_migration_keeps_registered_images_and_original_bytes() {
         .collect();
     // Reproduce the exact pre-4.1 schema inside this dedicated temporary fixture.
     fixture.db.with(|db| {
-        db.execute_batch("DROP TABLE product_attribute_values; DROP TABLE attribute_definitions; ALTER TABLE products DROP COLUMN listing_title; ALTER TABLE products DROP COLUMN listing_description; PRAGMA user_version = 2;")?;
+        db.execute_batch("DROP TABLE product_attribute_values; DROP TABLE attribute_definitions; DROP TRIGGER products_require_group_insert; DROP TRIGGER products_require_group_update; DROP INDEX products_group_id; ALTER TABLE products DROP COLUMN group_id; DROP TABLE attribute_groups; ALTER TABLE products DROP COLUMN listing_title; ALTER TABLE products DROP COLUMN listing_description; PRAGMA user_version = 2;")?;
         Ok(())
     }).unwrap();
     let directory = fixture.temp.0.clone();
@@ -2030,7 +2032,7 @@ fn schema_two_startup_migration_keeps_registered_images_and_original_bytes() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
     assert_eq!(product_service::get(&db, &product.id).unwrap(), product);
     assert_eq!(repository::list(&db, &product.id).unwrap(), images);
@@ -2061,6 +2063,7 @@ fn attribute_value_delete_failure_preserves_product_images_bytes_after_restart()
             let a = attribute_service::create(
                 db,
                 CreateAttributeInput {
+                    group_id: None,
                     name: "重量".into(),
                     data_type: "number".into(),
                     unit: Some("g".into()),
@@ -2448,11 +2451,75 @@ fn product_delete_rejects_source_reparse_point_and_retains_destination_reparse_p
 }
 
 // Phase 4.2: values participate in deletion snapshots, rollback and commit resolution.
+#[test]
+fn product_delete_includes_all_groups_and_rejects_stale_membership() {
+    let f = Fixture::new();
+    f.import_distinct(40, 2);
+    let a = seed_attribute_values(&f);
+    let g =
+        f.db.with(|db| {
+            let g = crate::services::attribute_group_service::create(
+                db,
+                crate::domain::attribute_group::CreateAttributeGroupInput { name: "PC".into() },
+            )?;
+            let b = crate::services::attribute_service::create(
+                db,
+                crate::domain::attribute::CreateAttributeInput {
+                    group_id: Some(g.id.clone()),
+                    name: a.name.clone(),
+                    data_type: "text".into(),
+                    unit: None,
+                },
+            )?;
+            crate::infrastructure::db::attribute_value_repository::set(
+                db,
+                &f.product.id,
+                &b.id,
+                Some("別グループ保持値"),
+            )?;
+            Ok(g)
+        })
+        .unwrap();
+    let old = product_delete_input(&f);
+    assert_eq!(old.expected_attribute_values.len(), 2);
+    f.db.with(|db| {
+        db.execute(
+            "UPDATE products SET group_id=?1 WHERE id=?2",
+            rusqlite::params![g.id, f.product.id],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        crate::services::product_deletion_service::delete(&f.db, &f.media, &old).unwrap_err(),
+        AppError::StaleData
+    );
+    assert_eq!(f.ordered().len(), 2);
+    let report = crate::services::product_deletion_service::delete(
+        &f.db,
+        &f.media,
+        &product_delete_input(&f),
+    )
+    .unwrap();
+    assert_eq!(report.affected_image_count, 2);
+    f.db.with(|db| {
+        assert!(
+            crate::infrastructure::db::attribute_value_repository::list(db, &f.product.id)?
+                .is_empty()
+        );
+        assert_eq!(crate::services::attribute_service::list(db)?.len(), 2);
+        assert!(!db.prepare("PRAGMA foreign_key_check")?.exists([])?);
+        Ok(())
+    })
+    .unwrap();
+}
+
 fn seed_attribute_values(f: &Fixture) -> crate::domain::attribute::AttributeDefinition {
     f.db.with(|db| {
         let a = crate::services::attribute_service::create(
             db,
             crate::domain::attribute::CreateAttributeInput {
+                group_id: None,
                 name: "素材".into(),
                 data_type: "text".into(),
                 unit: None,
@@ -2537,6 +2604,7 @@ fn product_delete_rejects_value_add_change_remove_without_updated_product_token(
                     let b = crate::services::attribute_service::create(
                         db,
                         crate::domain::attribute::CreateAttributeInput {
+                            group_id: None,
                             name: "追加".into(),
                             data_type: "text".into(),
                             unit: None,

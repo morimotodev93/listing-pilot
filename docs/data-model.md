@@ -1,7 +1,24 @@
-# 商品データモデル（Phase 4.3）
+# 商品データモデル（Phase 4.5.1）
 
-現在のスキーマは4。0003で共通項目定義と値テーブル、0004で公開用文章の2列を追加する。
+現在のスキーマは5。0003で共通項目定義と値テーブル、0004で公開用文章の2列、0005でグループを追加する。
 既存商品・画像の列・バイト列・参照は変更しない。以下のPhase 3.xに関する「追加しない」は当時の変更範囲を示す。
+
+## attribute_groupsと所属（Phase 4.5.1）
+
+attribute_groupsはid（UUID主キー）、name（BINARY一意）、archived_at（NULLなら有効）、created_at、updated_atを持つ。
+固定既定UUIDは `7a8f0c3e-4d5b-4c6a-9e20-1234567890ab`。名前変更可能、アーカイブ不可。
+他グループも商品が1件以上あればアーカイブ不可。定義と値はアーカイブ/復元で保持する。
+
+products.group_idはREFERENCES＋INSERT/UPDATEトリガーでNULL・不在参照を拒否する。
+attribute_definitions.group_idはNOT NULL REFERENCES、作成後変更不可。
+定義の名前一意制約は `UNIQUE(group_id,name)` で、非表示の定義も対象。
+既存商品・定義はすべて既定へ移行する。商品テーブルは再構築せず、定義と値だけ同一IMMEDIATEでコピー・置換する。
+元の列・ID・値は保持し、foreign_keys=ONのまま最後にforeign_key_checkを行う。
+
+値の主キーは(product_id,attribute_id)のままで、別グループの値の保持を許可する。
+保存できるのは最終所属グループの有効な定義だけ。不正な更新・クリアでは商品更新もロールバックする。
+編集候補・プレビュー・CSVは現在グループに絞る。商品削除は全グループの値を比較・削除する。
+詳しくは [ADR 0011](decisions/0011-attribute-groups.md) を参照。
 
 商品編集は既存の `updated_at` を楽観ロックのトークンとして使用します。
 フォーム開始時の値を `expectedUpdatedAt` として渡し、IDと更新日時を条件に単一SQLで更新します。
@@ -37,6 +54,7 @@ COMMIT結果の確認不能時は成功を返さず、管理画像を動かし�
 | 列 | SQLite型 | 制約・意味 |
 | --- | --- | --- |
 | id | TEXT | PRIMARY KEY / NOT NULL。Rust生成UUID v4。SKU変更でも不変 |
+| group_id | TEXT | attribute_groups(id)へのON DELETE RESTRICT。NULLはINSERT/UPDATEトリガーで拒否 |
 | sku | TEXT | NOT NULL / UNIQUE / COLLATE BINARY。前後空白を除去し空を拒否 |
 | name | TEXT | NOT NULL。前後空白を除去し空を拒否 |
 | brand | TEXT | 任意。空白のみならNULL |
@@ -54,7 +72,7 @@ DBではNOT NULL / UNIQUE / CHECKを使い、価格の整数型と範囲も防�
 未入力の価格と0円は区別します。浮動小数点数による価格計算はありません。
 UIはIntl APIで円とOSのローカルタイムゾーンの日時を表示します。
 
-DDLの正本は `src-tauri/migrations/0001_create_products.sql` と `0004_add_listing_content.sql` です。
+DDLの正本は `src-tauri/migrations/0001_create_products.sql`、`0004_add_listing_content.sql`、`0005_add_attribute_groups.sql` です。
 公開用文章はname・description_noteから自動転記しません。旧API更新で省略した新フィールドは保持し、
 明示的NULLでのみ解除します。新規作成の省略はNULLです。検証と改行正規化はRustで行います。
 詳細は [ADR 0008](decisions/0008-listing-content.md) を参照してください。
@@ -125,14 +143,15 @@ SQLiteとファイル操作全体を一つのトランザクションにはで�
 登録済みの欠落ファイルはDBに残し、一覧APIでプレビューなしを返します。UIは画像がない旨とバックアップ確認を表示します。
 隔離画像の自動再登録や元のパスへの自動復元は行いません。元ファイルから再取り込みするか、DBとmediaを揃えたバックアップで復旧してください。
 
-## attribute_definitions（Phase 4.1）
+## attribute_definitions（Phase 4.1 / 4.5.1）
 
-正本は `src-tauri/migrations/0003_create_custom_attributes.sql`。
+正本は `src-tauri/migrations/0003_create_custom_attributes.sql` と `0005_add_attribute_groups.sql`。
 
 | 列 | 型・意味 |
 | --- | --- |
 | id | TEXT PRIMARY KEY NOT NULL、Rust生成UUID v4 |
-| name | TEXT NOT NULL UNIQUE COLLATE BINARY。Rust trim後1〜80 Unicode文字、制御文字・改行禁止 |
+| group_id | TEXT NOT NULL、attribute_groups(id)へのON DELETE RESTRICT。作成後変更不可 |
+| name | TEXT NOT NULL COLLATE BINARY、UNIQUE(group_id,name)。Rust trim後1〜80 Unicode文字、制御文字・改行禁止 |
 | data_type | TEXT NOT NULL、CHECKでtext / numberのみ |
 | unit | TEXT NULL。TextはNULL必須、Numberは任意・Rust trim後最大20文字、空欄はNULL |
 | archived_at | TEXT NULL。非表示はUTC日時、復元はNULL |

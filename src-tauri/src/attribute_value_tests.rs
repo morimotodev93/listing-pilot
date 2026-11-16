@@ -14,6 +14,7 @@ fn db() -> Connection {
 }
 fn input(sku: &str) -> ProductInput {
     ProductInput {
+        group_id: None,
         sku: sku.into(),
         name: "質量".into(),
         brand: None,
@@ -27,6 +28,7 @@ fn definition(db: &Connection, name: &str, kind: &str) -> AttributeDefinition {
     attributes::create(
         db,
         CreateAttributeInput {
+            group_id: None,
             name: name.into(),
             data_type: kind.into(),
             unit: None,
@@ -305,7 +307,7 @@ fn sql_failure_after_first_value_rolls_back_create_and_update() {
     assert_eq!(products::list(&db).unwrap(), vec![p]);
 }
 #[test]
-fn restart_preserves_decimal_text_and_schema_three() {
+fn restart_preserves_decimal_text_and_schema_five() {
     let path = std::env::temp_dir().join(format!(
         "listing-pilot-values-{}.sqlite3",
         uuid::Uuid::new_v4()
@@ -330,7 +332,7 @@ fn restart_preserves_decimal_text_and_schema_three() {
         assert_eq!(
             db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            4
+            5
         );
     }
     std::fs::remove_file(path).unwrap();

@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Snapshot {
+    pub group: crate::domain::attribute_group::AttributeGroup,
     pub product: crate::domain::product::Product,
     pub images: Vec<crate::domain::image::ProductImage>,
     pub definitions: Vec<crate::domain::attribute::AttributeDefinition>,
@@ -23,8 +24,10 @@ pub(crate) fn read(
     connection: &rusqlite::Connection,
     product_id: &str,
 ) -> Result<Snapshot, AppError> {
+    let product = product_repository::get(connection, product_id)?;
     Ok(Snapshot {
-        product: product_repository::get(connection, product_id)?,
+        group: super::attribute_group_service::require_active(connection, &product.group_id)?,
+        product,
         images: image_repository::list(connection, product_id)?,
         definitions: attribute_repository::list(connection)?,
         values: attribute_value_repository::list(connection, product_id)?,
@@ -58,6 +61,7 @@ pub(crate) fn build(snapshot: Snapshot, media: &MediaStorage) -> ListingPreview 
     let mut hash = Sha256::new();
     hash.update(format!("{snapshot:?}"));
     let Snapshot {
+        group: _,
         product,
         images,
         definitions,
@@ -107,7 +111,7 @@ pub(crate) fn build(snapshot: Snapshot, media: &MediaStorage) -> ListingPreview 
     }
     let attributes = definitions
         .into_iter()
-        .filter(|d| d.archived_at.is_none())
+        .filter(|d| d.group_id == product.group_id && d.archived_at.is_none())
         .filter_map(|d| {
             values
                 .iter()
