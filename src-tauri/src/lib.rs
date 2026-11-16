@@ -15,6 +15,8 @@ mod listing_content_tests;
 #[cfg(test)]
 mod listing_preview_tests;
 #[cfg(test)]
+mod product_export_tests;
+#[cfg(test)]
 mod tests;
 
 use std::sync::{Arc, Mutex};
@@ -46,6 +48,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::greet,
+            commands::product_export::export_product,
             commands::listing_preview::get_listing_preview,
             commands::attribute::list_attribute_definitions,
             commands::attribute::create_attribute_definition,

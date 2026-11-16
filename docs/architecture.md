@@ -3,6 +3,16 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
+## Phase 4.5 商品1件のエクスポート
+
+ListingPreview → lib/api/productExport.ts → commands/product_export.rs → product_export_service。
+listing_preview_serviceのsnapshot/read/buildを再利用し、取得時点を表すsnapshotTokenを照合する。
+export_csvが固定CSV・数式リスク検証、export_storageが一時フォルダー・非置換確定・限定清掃を担当する。
+MediaStorageが管理原本の安全な読み取りとコピー中のサイズ・SHA-256照合を担当する。
+メディアpermitを先に取得し、コピー中はDB Mutexを解放する。最終照合からWindows非置換移動まで
+短いIMMEDIATEトランザクションで商品・属性更新も排他する。DB・管理画像は更新しない。
+詳細と障害時の保証範囲は [ADR 0010](decisions/0010-single-product-export.md) を参照。
+
 ## Phase 4.4 出品プレビュー
 
 ProductDetail / ListingPreview → lib/api/listingPreview.ts → commands/listing_preview.rs →

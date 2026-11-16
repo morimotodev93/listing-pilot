@@ -1,6 +1,14 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const messages: Record<string, string> = {
+  export_blocked: "安全に読み取れない画像があります。問題を修正してプレビューを再読み込みしてください。",
+  export_warning_required: "現在のプレビューの警告を確認してからエクスポートしてください。",
+  csv_formula_risk: "CSVで数式として扱われる文字列があるため出力を中止しました。",
+  export_image_invalid: "画像のサイズ・SHA-256または安全性を確認できないため、出力全体を中止しました。",
+  export_destination: "出力先を利用できません。アプリ保存領域やリンク以外のフォルダーを選択してください。",
+  export_collision: "同名の完成フォルダーが存在します。別の親フォルダーを選択してください。既存の出力は上書きしていません。",
+  export_write: "出力を書き込めませんでした。空き容量・アクセス権を確認してください。",
+  export_unknown: "完成処理の結果を確認できません。出力先を確認してから再実行してください。",
   required_field: "SKUと商品名を入力してください。",
   invalid_attribute_value: "カスタム値を確認してください。Textは2,000文字以内で改行・制御文字は使えません。Numberは整数15桁・小数6桁以内の半角数字で入力してください。",
   invalid_attribute_definition: "項目名は1〜80文字、単位は20文字以内で入力し、改行・制御文字は使わないでください。単位はNumber項目だけに設定できます。",
@@ -32,6 +40,10 @@ const messages: Record<string, string> = {
 
 export function errorMessage(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+  const columns: Record<string, string> = { "product.sku": "SKU", "product.title": "出品候補タイトル", "product.description": "公開用説明文", "attributes.name": "カスタム項目名", "attributes.value": "カスタム値", "attributes.unit": "単位" };
+  if (code === "csv_formula_risk" && typeof error === "object" && error !== null && "column" in error) {
+    return `${messages[code]} 対象：${columns[String(error.column)] ?? "CSV文字列"}。入力を確認してください。`;
+  }
   return messages[code] ?? "処理に失敗しました。アプリを再起動してお試しください。";
 }
 

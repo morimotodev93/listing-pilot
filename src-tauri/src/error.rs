@@ -3,6 +3,14 @@ use serde::Serialize;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum AppError {
+    ExportBlocked,
+    ExportWarningRequired,
+    CsvFormulaRisk { column: String },
+    ExportImageInvalid,
+    ExportDestination,
+    ExportCollision,
+    ExportWrite,
+    ExportUnknown,
     RequiredField,
     InvalidAttributeDefinition,
     InvalidAttributeValue,

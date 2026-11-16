@@ -1,5 +1,74 @@
 # 開発環境の検証結果
 
+## Phase 4.5 商品1件のCSV・原本画像出力（2026-11-16 日本時間）
+
+基準HEADは `0d0a740`。着手時の作業ツリーはクリーン。スキーマVersion 4、既存Migration、依存ロック、
+アプリ識別子、CSP・Asset Protocol・Capabilitiesは変更していない。実装契約は [ADR 0010](decisions/0010-single-product-export.md)。
+
+| 最終実行コマンド | 結果 |
+|---|---|
+| `npm run build` | 成功、終了0。TypeScript両設定の型検査とVite本番ビルド。Tauri buildでも再成功 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 成功、終了0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 成功、終了0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 成功、終了0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | **146件成功、失敗0・無視0**。既存125件＋出力専用21件。main/doc-testは各0件 |
+| `npm run tauri build` | 成功、終了0。Windows Release本体・MSI・NSIS生成 |
+| `git diff --check` | 成功、終了0。未追跡の新規ソースも別途確認 |
+
+Viteはサンドボックス内で子プロセス起動が `spawn EPERM` になった。アプリや依存は変更せず、通常権限で再実行して成功。
+Tauri buildは既存識別子の末尾 `.app` に関するmacOS向け警告を出すが、識別子は維持した。
+
+### 自動テストの確認範囲
+
+出力専用21テスト内で複数入力を検証している。すべて一意の専用一時DB・メディア・出力先を使用。
+
+- 日本語・カンマ・引用符・複数行、BOM、CRLF、候補タイトルの出典、内部メモの非混入、NULL価格と0円。
+- Number負数・先頭ゼロ・小数6桁の保持、非表示属性の除外、属性・画像0件のヘッダー。
+- `= + - @`、先頭空白・タブ・制御文字・不可視文字・埋込改行の数式リスク拒否、SKU・公開文章・属性名/値/単位の対象列識別。
+- JPEG・PNG・WebPのバイト一致、登録サイズ・SHA-256照合、欠番のあるDB順序からCSVだけ連番化、管理DBの全表比較とVersion 4。
+- ready、warningの同一候補確認必須、blocked、商品・SKU・価格・文章・定義・値の変更、画像追加/削除/並替えによる競合。
+- コピー後・確定前の商品変更の拒否、メディアpermit競合と解放後の再実行。
+- LocalData配下・非ディレクトリ・欠落出力先、Windows junction出力先と管理画像の親junctionの拒否。
+- 画像欠落、サイズ/ハッシュ不一致時の全体中止と清掃、同名完成フォルダーの非置換、別の親への再実行。
+- create_new失敗、途中作成失敗、未知の追加ファイルを残す限定清掃、清掃失敗時の元エラー＋残存場所、確定結果不明時の保持。
+
+### 実WebView2（隔離した開発版）
+
+`npm run tauri dev -- --config .verification/phase45/dev-config-2.json` で起動。
+`appDirectoriesOverride` による専用 `.verification/phase45/data2` を実IPCで確認してから操作した。
+通常のLocalData・既存フィクスチャは操作していない。デバッグ接続と開発版は検証後に停止。
+
+| シナリオ | 観測した結果 |
+|---|---|
+| ready正常出力 | 実ネイティブフォルダー選択→UI成功表示、商品1件・画像1枚、CSV3ファイルと画像を確認 |
+| warning確認後出力 | 未確認ではボタン無効、未確認IPCはexport_warning_required。明示確認後に成功 |
+| blocked | 専用管理画像を退避して欠落を再現。UI出力無効・IPCはexport_blocked。原位置へ戻すとready・実画像表示 |
+| キャンセル | warning・readyでネイティブダイアログをキャンセル。専用通知を表示し、成功表示なし |
+| 完成先衝突 | 同じ親へ再出力しexport_collision、既存出力と原本を保持 |
+| 日本語CSV・画像 | 日本語SKU/公開文章、BOM、内部メモ非混入。元画像と出力のバイト一致・登録SHA-256一致 |
+| 画像なし | 警告確認後にUI成功表示、画像0枚・空のimages/とヘッダー付きCSV |
+| 変更後の競合 | 公開タイトル更新後、古いsnapshotTokenによるIPCをstale_dataで拒否 |
+| 二重送信 | ダイアログ表示中のボタン無効と二回目のexport_productがmedia_busyになることを確認 |
+| 再起動 | 同じ隔離データで再起動し、商品全体・画像メタデータ・画像バイト・既存出力を比較。プレビュー画像も表示 |
+| 既存機能回帰 | 再起動後にネイティブ追加取込、順序変更と共通プレビュー反映、画像削除UI、商品削除UI。独立した出力成果物は残る |
+| JS/CSP | 対象の実行区間でJavaScript例外0、securitypolicyviolation 0 |
+
+検証証跡はGit対象外の `.verification/phase45/` に保持。
+`smoke-5.mjs` は画像なしUI出力・原本一致まで成功した後、検証コードの拒否結果の取得方法で停止。
+`tail.mjs` は衝突・競合・blockedと復元まで成功した後、検証画像寸法の誤った期待値で停止。
+修正した `finish.mjs` と `restart.mjs` は終了0で成功し、`finish-result.json`・`restart-result.json` を保存。
+初回のスクリプト文字コード・ダイアログ要素識別子の問題も検証用コードで修正した。これらをアプリの成功と混同しない。
+
+### 制限・未検証
+
+- 開発版でリポジトリ配下を出力先にした一回の試行はexport_writeで安全側に停止し、不完全な完成フォルダーは公開されなかった。
+  ファイル監視のEBUSYも観測したが、因果関係は未確定。専用OS一時フォルダーでは同じ出力操作に成功。
+- 実WebView2での確認は開発版。Release本体の画面操作、本番CSP下の今回の出力操作、MSI/NSISの実インストール・更新・アンインストールは未実施。
+- 別PC、実電源断、実ディスク故障/満杯、ネットワーク共有、外部プログラムによる検査直後のパス差替えは未検証。
+- 清掃失敗・確定結果不明は決定的な自動テストで確認した。実ストレージ故障による同条件は再現していない。
+- Windows以外は完成ディレクトリの安全な非置換移動を実装しておらず、出力を失敗させる。
+- Gitのステージング・Commit・Pushは実施していない。
+
 ## Phase 4.4 出品プレビュー・入力検証（2026-11-16 日本時間）
 
 開始HEADは `59546b1`、開始時の作業ツリーはクリーン。

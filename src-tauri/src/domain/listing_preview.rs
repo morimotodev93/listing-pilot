@@ -59,6 +59,7 @@ pub struct ListingPreviewAttribute {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListingPreview {
+    pub snapshot_token: String,
     pub product_id: String,
     pub sku: String,
     pub title: String,

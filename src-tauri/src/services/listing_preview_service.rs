@@ -9,6 +9,36 @@ use crate::{
         media_storage::MediaStorage,
     },
 };
+use sha2::{Digest, Sha256};
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Snapshot {
+    pub product: crate::domain::product::Product,
+    pub images: Vec<crate::domain::image::ProductImage>,
+    pub definitions: Vec<crate::domain::attribute::AttributeDefinition>,
+    pub values: Vec<crate::domain::attribute_value::ProductAttributeValue>,
+}
+
+pub(crate) fn read(
+    connection: &rusqlite::Connection,
+    product_id: &str,
+) -> Result<Snapshot, AppError> {
+    Ok(Snapshot {
+        product: product_repository::get(connection, product_id)?,
+        images: image_repository::list(connection, product_id)?,
+        definitions: attribute_repository::list(connection)?,
+        values: attribute_value_repository::list(connection, product_id)?,
+    })
+}
+
+pub(crate) fn snapshot(database: &Database, product_id: &str) -> Result<Snapshot, AppError> {
+    database.with_mut(|connection| {
+        let transaction = connection.transaction()?;
+        let snapshot = read(&transaction, product_id)?;
+        transaction.commit()?;
+        Ok(snapshot)
+    })
+}
 
 // Shared candidate contract for preview and future export. No stored status or writes.
 pub fn get(
@@ -19,17 +49,20 @@ pub fn get(
     // Same ordering as media mutations: permit -> DB -> release DB -> file I/O.
     // The OS lock is held by MediaStorage throughout its lifetime.
     let _permit = media.begin_import()?;
-    let (product, images, definitions, values) = database.with_mut(|connection| {
-        let transaction = connection.transaction()?;
-        let snapshot = (
-            product_repository::get(&transaction, product_id)?,
-            image_repository::list(&transaction, product_id)?,
-            attribute_repository::list(&transaction)?,
-            attribute_value_repository::list(&transaction, product_id)?,
-        );
-        transaction.commit()?;
-        Ok(snapshot)
-    })?;
+    let snapshot = snapshot(database, product_id)?;
+    Ok(build(snapshot, media))
+}
+
+pub(crate) fn build(snapshot: Snapshot, media: &MediaStorage) -> ListingPreview {
+    // Opaque, process-version-local identity; no internal data is sent to React.
+    let mut hash = Sha256::new();
+    hash.update(format!("{snapshot:?}"));
+    let Snapshot {
+        product,
+        images,
+        definitions,
+        values,
+    } = snapshot;
     let mut issues = Vec::new();
     let mut warning = |code, message| {
         issues.push(ListingIssue {
@@ -94,7 +127,9 @@ pub fn get(
     } else {
         ListingStatus::Warning
     };
-    Ok(ListingPreview {
+    hash.update(format!("{images:?}{issues:?}"));
+    ListingPreview {
+        snapshot_token: format!("{:x}", hash.finalize()),
         product_id: product.id,
         sku: product.sku,
         title,
@@ -105,5 +140,5 @@ pub fn get(
         images,
         status,
         issues,
-    })
+    }
 }

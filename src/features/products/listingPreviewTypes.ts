@@ -1,5 +1,6 @@
 export type ListingPreviewImage = { imageId: string; sortOrder: number; previewUrl: string | null };
 export type ListingPreview = {
+  snapshotToken: string;
   productId: string;
   sku: string;
   title: string;

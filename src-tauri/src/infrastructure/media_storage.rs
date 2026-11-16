@@ -95,7 +95,7 @@ fn check_components(path: &Path, create: bool) -> Result<(), AppError> {
     Ok(())
 }
 
-fn directory(path: &Path, create: bool) -> Result<(), AppError> {
+pub(crate) fn directory(path: &Path, create: bool) -> Result<(), AppError> {
     check_components(path, create)?;
     if !fs::symlink_metadata(path)
         .map_err(|_| AppError::FileRead)?
@@ -106,7 +106,7 @@ fn directory(path: &Path, create: bool) -> Result<(), AppError> {
     Ok(())
 }
 
-fn safe_regular_file(path: &Path) -> Result<Metadata, AppError> {
+pub(crate) fn safe_regular_file(path: &Path) -> Result<Metadata, AppError> {
     check_components(path, false)?;
     let metadata = fs::symlink_metadata(path).map_err(|_| AppError::FileRead)?;
     if !metadata.is_file() || is_link(&metadata) {
@@ -115,7 +115,7 @@ fn safe_regular_file(path: &Path) -> Result<Metadata, AppError> {
     Ok(metadata)
 }
 
-fn open_read(path: &Path) -> Result<File, AppError> {
+pub(crate) fn open_read(path: &Path) -> Result<File, AppError> {
     safe_regular_file(path)?;
     let mut options = OpenOptions::new();
     options.read(true);
@@ -144,7 +144,7 @@ fn image_error(error: image::ImageError) -> AppError {
 }
 
 #[cfg(windows)]
-fn place_new(source: &Path, destination: &Path) -> std::io::Result<()> {
+pub(crate) fn place_new(source: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
     #[link(name = "kernel32")]
@@ -210,6 +210,48 @@ pub fn check_dimensions(width: u32, height: u32) -> Result<(), AppError> {
 }
 
 impl MediaStorage {
+    pub(crate) fn data_directory(&self) -> Result<&Path, AppError> {
+        self.root.parent().ok_or(AppError::ExportDestination)
+    }
+
+    pub(crate) fn copy_original(
+        &self,
+        image: &ProductImage,
+        target: &mut File,
+    ) -> Result<(), AppError> {
+        let mut operation = || -> Result<(), AppError> {
+            let mut source = open_read(&self.image_path(image)?)?.take(MAX_FILE_BYTES + 1);
+            let mut hash = Sha256::new();
+            let mut count = 0u64;
+            let mut buffer = [0u8; 65536];
+            loop {
+                let size = source
+                    .read(&mut buffer)
+                    .map_err(|_| AppError::ExportImageInvalid)?;
+                if size == 0 {
+                    break;
+                }
+                count += size as u64;
+                if count > MAX_FILE_BYTES {
+                    return Err(AppError::ExportImageInvalid);
+                }
+                hash.update(&buffer[..size]);
+                target
+                    .write_all(&buffer[..size])
+                    .map_err(|_| AppError::ExportWrite)?;
+            }
+            if i64::try_from(count).ok() != Some(image.file_size_bytes)
+                || format!("{:x}", hash.finalize()) != image.sha256
+            {
+                return Err(AppError::ExportImageInvalid);
+            }
+            target.sync_all().map_err(|_| AppError::ExportWrite)
+        };
+        operation().map_err(|error| match error {
+            AppError::ExportWrite => error,
+            _ => AppError::ExportImageInvalid,
+        })
+    }
     pub fn open(root: &Path) -> Result<Self, AppError> {
         directory(root, true)?;
         let lock_path = root.join(".lock");
