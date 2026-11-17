@@ -1,5 +1,102 @@
 # 開発環境の検証結果
 
+
+## Phase 4.5.2 第2回レビュー後の軽微改善（2026-11-17 日本時間）
+
+AttributeManagerの操作後再取得で、操作前の選択グループ名と入力欄が一致している場合だけ
+最新名へ同期する。未保存の改名入力と競合時の保持・再読込案内は維持する。
+グループ作成確認には、成功した場合にほかの未保存入力を破棄し、失敗時は保持する旨を明記した。
+
+- `npm run build`：終了0。TypeScript両設定・Vite本番ビルド成功（38 modules）。
+- 実WebView2・専用 `.verification/phase452/data` で6シナリオ成功：別IPCの改名後に項目作成して最新名同期、
+  未保存改名がある再取得では入力保持、競合／明示再読込、改名成功、重複作成失敗時の全入力保持、作成成功時の選択／フォーム初期化。
+- 確認文言をdialog上で照合。捕捉JavaScript例外・ブラウザーログerrorは0件。
+- 結果はGit除外の `.verification/phase452/review2-improvements-result.json`。`git diff --check` 成功。
+- 今回はRust・Schema・CSV・画像管理を変更せず、Rustテスト・Release／インストーラーの再検証は実施していない。
+
+## Phase 4.5.2 グループ管理・商品所属UI（2026-11-17 日本時間）
+
+開始時HEADは `a44c5b3`、作業ツリーはクリーン。グループAPI／型、小さな確認dialog、
+グループ別項目管理、商品所属選択・一覧／詳細表示を実装した。
+Rust・Migration・Schema Version 5・CSP・Capabilities・Asset Protocol・依存ロックは変更していない。
+実装判断は [ADR 0011](decisions/0011-attribute-groups.md) を参照。
+
+### 最終ソースに対するチェック
+
+| コマンド | 観測結果 |
+|---|---|
+| `npm run build` | 終了0。TypeScript両設定とVite本番ビルド成功、38 modules |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了0。**158件成功・失敗0・無視0**、main/doc-test各0件 |
+| `npm run tauri dev -- --config .verification/phase452/dev-config.json` | 起動と正常終了後の再起動に成功、実WebView2で操作 |
+| `git diff --check` | 終了0。新規API／dialogも別途確認 |
+
+初回Viteビルドはサンドボックスの子プロセス起動で `spawn EPERM`。実行権限を拡張して成功。
+コード・依存変更で回避していない。通常設定のRelease／MSI／NSIS再生成は今回実施していない。
+
+### 実WebView2のシナリオ別結果
+
+`appDirectoriesOverride` を `.verification/phase452/data` に限定し、Path IPCの返却先が
+この専用領域であることを毎回照合してから操作した。通常のLocalDataには接続していない。
+CDPで実際のReactフォームを入力・クリックし、保存結果を実Rust IPCで読み戻した。
+Windowsネイティブファイル／フォルダー選択はUI Automationで操作した。
+
+| シナリオ | 結果 |
+|---|---|
+| グループ一覧・既定識別・改名 | 固定UUIDが初期選択。既定改名後も同じID。既定の非表示ボタンは無効 |
+| グループ作成・重複 | 作成後の再取得と自動選択成功。同名は拒否して入力保持 |
+| 項目管理 | グループ別の表示、別グループ同名許可、同一グループ同名拒否、改名・非表示／復元成功 |
+| グループ非表示／復元 | 未使用で成功。項目作成が無効になり、復元で定義を再利用。所属商品ありは日本語エラー |
+| 管理画面の未保存入力 | 切替キャンセルでグループ名・項目名保持、確定でフォームだけ破棄。新規グループの自動選択にも確認あり |
+| 表示設定 | グループ非表示チェックと項目非表示チェックが独立して機能 |
+| 新規商品 | 既定初期選択、別グループへ登録、選択定義だけ保存 |
+| 商品切替確認 | 未変更なら即切替。未保存値ありはdialog。キャンセル／実Escapeで元の選択・値を保持 |
+| 商品切替確定 | 未保存カスタム値だけ破棄。SKU・商品名・公開タイトル保持。戻ると保存済み値を再表示 |
+| 所属変更保存 | 旧／新グループ名を確認。キャンセルではDB所属不変。承認後は指定UUIDに変更し旧値を保全 |
+| 一覧・詳細 | グループ改名を一覧・詳細に反映。詳細の値は現在グループだけ |
+| 商品・定義・グループ競合 | 別IPCで更新してからUI保存し拒否を確認。編集入力保持、勝手な再送なし。再読込にも破棄確認 |
+| 読込失敗 | グループ／定義取得失敗時に商品保存禁止、管理一覧失敗時に変更禁止。商品一覧操作は継続 |
+| 保存後の再取得失敗 | グループ作成は「保存済み・再読込失敗」と表示して再送を停止。商品保存は成功通知と一覧取得エラーを分ける |
+| 二重送信 | 同じ評価内でフォームsubmitを2回実行。グループ作成・商品保存とも実IPCは1回、DBも1件 |
+| 無効グループ | フォーム開始後に選択先をアーカイブ。保存拒否で入力保持、商品は作られない |
+| 非同期読込中のキャンセル | 定義取得を保留してフォームを閉じ、応答を解放しても一覧画面を維持 |
+| 画像回帰 | 実ダイアログでPNG2枚を取り込み、Asset表示、並べ替え、個別削除に成功。取り込み元のハッシュ不変 |
+| プレビュー／CSV | 現在グループの陶器値だけを出力し、旧グループの木値を含まない。古いsnapshotTokenはstale_data |
+| 出力品質 | 一時ディレクトリで実フォルダー選択→UIエクスポート成功。CSVの固定ヘッダー・BOM・CRLF、画像のバイト／SHA-256一致を確認 |
+| 出力時の不変性 | 出力前後の編集スナップショット、管理画像バイト、取り込み元ハッシュが一致 |
+| warning／blocked | warning実商品で未確認時の出力無効。blockedは応答を限定注入して出力無効を確認。実画像の破壊はしていない |
+| 商品削除 | 全グループの値2件を確認表示し、対象商品と全値を削除。別商品の値・画像は保持 |
+| 正常終了・再起動 | 同じ専用領域で商品・所属・グループ・定義・全保存値・画像メタデータが一致。旧グループ値の再表示と実画像描画も成功 |
+
+読込失敗・保存後再取得失敗・二重送信待機は、実WebView2のIPC fetch境界で限定注入した。
+本番コードに検証用分岐は追加していない。全成功シナリオで捕捉JavaScript例外と
+ブラウザーログのerrorは0件（CSP違反ログなし）。通常CSPのReleaseでの操作は未実施。
+
+アプリ停止中に専用SQLiteを読取専用で検査し、user_version=5、integrity_check=ok、
+foreign_key_check=0件を確認。主商品の全グループ値2件・削除商品の値0件、画像ハッシュ一致を再確認した。
+既存Rust回帰はpreview/exportのblocked、文字コード・列順、JPEG／PNG／WebP原本不変も含む。
+
+### 証跡・制約
+
+Git対象外の `.verification/phase452/` にスクリプト、結果JSON、スクリーンショットを保持。
+主な成功結果は `result.json`、`failure-scenarios-result.json`、`additional-result.json`、
+`integration-result.json`、`database-result.json`、`restart-result.json`。
+初期検証スクリプトの待機条件・管理画像相対パスの修正前の失敗記録も保持している。
+スクリーンショットは `groups.png`、`membership-confirm.png`、`conflict.png`、
+`preview-export.png`、`restart.png`。新規依存・CI用フロントエンドテスト基盤は追加していない。
+
+ワークスペース内 `.verification/phase452/out` を選んだ出力は `export_write` となった。
+既存検証と同様の `%TEMP%` 配下の新規出力先では成功したが、前者の原因は未確定。
+既存の出力実装は変更せず、この出力先での問題は残る検証上の制約として報告する。
+Vite監視は専用WebViewプロファイル内のロックファイルに `EBUSY` を出したが、
+実IPCとUIシナリオは完走した。通常利用の保存領域・画像・既存検証成果物は変更していない。
+
+インストーラー導入・上書き更新、通常保存先での操作、別PC、実電源断・ディスク障害、
+通常Release CSPでの今回のUIは未検証。検証用プロセスは確認後に正常終了した。
+ステージング・Commit・Pushは行わず、レビュー待ちとする。
+
 ## Phase 4.5.1 グループ専用フィールド・Schema v5（2026-11-16 日本時間）
 
 基準HEADは `1f2dcc7`。着手時の作業ツリーはクリーン。契約と移行手順は

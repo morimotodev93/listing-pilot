@@ -3,15 +3,19 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
-## Phase 4.5.1 グループ専用カスタムフィールド
+## Phase 4.5.1 / 4.5.2 グループ専用カスタムフィールド
 
 commands/attribute_group.rs → services/attribute_group_service.rs → infrastructure/db/attribute_group_repository.rs
 で一覧・作成・改名・アーカイブ/復元を扱う。定義・商品は必ず1グループに所属する。Schema Versionは5。
 既存商品・定義はMigration 0005で固定UUIDの既定グループへ移行する。
 商品保存のIMMEDIATE内で最終所属と編集対象定義の一致を検証し、別グループの保存値は保持する。
-商品編集スナップショットは現在グループの有効定義だけを返す。旧フォームの新規作成・項目設定は既定に絞る。
+商品編集スナップショットは現在グループの有効定義と、保全された全グループの保存値を返す。
+Reactは全グループ・全定義を別途取得し、UUIDで照合して現在選択の有効定義だけを表示・送信する。
+ProductFormは保存済み値と編集中の値を分け、切替時の未保存値破棄と所属変更保存の確認を行う。
+AttributeManagerはグループ単位で定義を管理し、未保存入力の切替確認とグループ／項目共通の操作ガードを持つ。
+Appの更新カウンターでグループ変更後の一覧・詳細の名前再取得を通知する。
 listing_preview_serviceの共通候補生成で所属を絞り、CSVも再利用する。トークンには所属と現在グループ情報を含める。
-グループ管理UIはPhase 4.5.2へ残す。移行手順・IPC契約は [ADR 0011](decisions/0011-attribute-groups.md) を参照。
+グループUIはlib/api/attributeGroups.ts経由で既存IPCを利用する。移行手順・IPC／確認UI契約は [ADR 0011](decisions/0011-attribute-groups.md) を参照。
 
 ## Phase 4.5 商品1件のエクスポート
 

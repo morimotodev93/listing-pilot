@@ -1,3 +1,4 @@
+import type { AttributeGroup } from "../../attributes/types";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { deleteProduct, getProductDeletePreview, getProductEditSnapshot } from "../../../lib/api/products";
 import type { DeleteProductReport, ProductDeletePreview } from "../../../lib/api/products";
@@ -5,15 +6,16 @@ import type { Product, ProductEditSnapshot } from "../types";
 import { ProductImages } from "./ProductImages";
 import { ListingPreview } from "./ListingPreview";
 
-type Props = { product: Product; onBack: () => void; onEdit: () => void; onDeleted: (report: DeleteProductReport) => void };
+type Props = { product: Product; groups: AttributeGroup[]; onBack: () => void; onEdit: () => void; onDeleted: (report: DeleteProductReport) => void };
 const yen = new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY" });
 const date = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" });
 
-export function ProductDetail({ product: initialProduct, onBack, onEdit, onDeleted }: Props) {
+export function ProductDetail({ product: initialProduct, groups, onBack, onEdit, onDeleted }: Props) {
   const [showListing, setShowListing] = useState(false);
   const [snapshot, setSnapshot] = useState<ProductEditSnapshot | null>(null);
   const [valueError, setValueError] = useState("");
   const product = snapshot?.product ?? initialProduct;
+  const groupName = groups.find(g => g.id === product.group_id)?.name ?? "グループ情報を取得できません";
   useEffect(() => {
     let active = true;
     void getProductEditSnapshot(initialProduct.id).then(result => { if (active) setSnapshot(result); })
@@ -69,6 +71,7 @@ export function ProductDetail({ product: initialProduct, onBack, onEdit, onDelet
       </div>
     </div>
     <dl className="product-information">
+      <dt>グループ</dt><dd>{groupName}</dd>
       <dt>SKU</dt><dd>{product.sku}</dd>
       <dt>ブランド</dt><dd>{product.brand ?? "未設定"}</dd>
       <dt>価格</dt><dd>{product.price_yen === null ? "未設定" : yen.format(product.price_yen)}</dd>
@@ -83,7 +86,7 @@ export function ProductDetail({ product: initialProduct, onBack, onEdit, onDelet
     </dl>
     <h3>カスタム商品項目</h3>
     {valueError ? <p className="error" role="alert">{valueError} 一覧へ戻って開き直してください。</p> : !snapshot ? <p role="status">読み込んでいます…</p> :
-      <dl className="product-information">{snapshot.definitions.filter(a => !a.archivedAt).map(a => {
+      <dl className="product-information">{snapshot.definitions.filter(a => a.groupId === product.group_id && !a.archivedAt).map(a => {
         const value = snapshot.values.find(v => v.attributeId === a.id)?.value;
         return <Fragment key={a.id}><dt>{a.name}</dt><dd>{value === undefined ? "未設定" : `${value}${a.unit ? ` ${a.unit}` : ""}`}</dd></Fragment>;
       })}</dl>}
