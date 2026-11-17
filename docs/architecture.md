@@ -3,6 +3,29 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
+## Phase 4.6 複数商品の一括エクスポート
+
+ProductList → BatchExport → lib/api/productExport.ts → commands/product_export.rs → batch_export_service。
+一覧の選択・グループ絞り込みはUUIDで管理し、削除済みの選択を再取得時に除く。
+確認対象の配列を固定し、読込・出力は同期refで二重送信と遷移を防ぐ。確認中はカスタム項目設定もinertにする。
+StrictModeのEffect再実行では同じプレビューPromiseを再利用する。再読込・キャンセル・再入場では警告承認を解除する。
+
+新しいIPCは `get_export_batch_preview({input:{productIds}})` と
+`export_products({input:{productIds,snapshotToken,warningToken}})`。返却プレビューはcamelCase、
+結果は単品のExportReport（status付き、集計はsnake_case）を共用する。
+サービスでUUID形式・一意性・20商品上限を検証し、ID昇順に正規化する。
+メディアpermit取得 → 全商品を単一読取トランザクションで取得 → DB Mutex解放 → 共通候補生成・上限検査 →
+全CSV事前生成 → ネイティブ出力先選択 → 全対象再取得・トークン再照合 → 1つのWorkspaceへ順次書き込み →
+短いIMMEDIATE内で全Snapshot再照合 → Windows非置換移動を1回、の流れを使う。
+画像コピー中はDB Mutexを保持しない。最終読取トランザクションは公開後にCOMMITせずdropで終了する。
+
+product_export_serviceのprepare/write_productで画像相対名・export_csvによるCSV・MediaStorageによる
+サイズとSHA-256照合・syncを単品と共有する。Workspaceは固定CSV、images/、商品UUID階層だけを受け付け、
+作成したファイルとディレクトリを記録し、失敗時に逆順で限定清掃する。未知の項目・リンクは保持する。
+一括トークンはID集合と各商品の既存トークンを決定的な順序でSHA-256へ入力し、単品トークンは変更しない。
+Schema Version 5・Migration・CSP・Asset Protocol・Capabilities・依存関係は維持する。
+詳細は [ADR 0012](decisions/0012-batch-product-export.md) を参照。
+
 ## Phase 4.5.1 / 4.5.2 グループ専用カスタムフィールド
 
 commands/attribute_group.rs → services/attribute_group_service.rs → infrastructure/db/attribute_group_repository.rs

@@ -56,6 +56,8 @@ pub fn run() {
             commands::attribute_group::update_attribute_group,
             commands::attribute_group::set_attribute_group_archived,
             commands::product_export::export_product,
+            commands::product_export::get_export_batch_preview,
+            commands::product_export::export_products,
             commands::listing_preview::get_listing_preview,
             commands::attribute::list_attribute_definitions,
             commands::attribute::create_attribute_definition,

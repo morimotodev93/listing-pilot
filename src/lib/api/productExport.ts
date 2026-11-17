@@ -1,4 +1,21 @@
 import { request } from "./request";
+import type { ListingPreview } from "../../features/products/listingPreviewTypes";
+
+export type BatchPreview = {
+  snapshotToken: string;
+  products: { name: string; groupId: string; groupName: string; preview: Omit<ListingPreview, "images"> & { images: { imageId: string; sortOrder: number; previewPath: string | null }[] } }[];
+  imageCount: number;
+  hasWarnings: boolean;
+  blocked: boolean;
+};
+
+export function getExportBatchPreview(productIds: string[]): Promise<BatchPreview> {
+  return request("get_export_batch_preview", { input: { productIds } });
+}
+
+export function exportProducts(productIds: string[], snapshotToken: string, warningToken: string | null): Promise<ExportReport> {
+  return request("export_products", { input: { productIds, snapshotToken, warningToken } });
+}
 
 export type ExportReport =
   | { status: "cancelled" }

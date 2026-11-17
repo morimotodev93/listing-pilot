@@ -1,6 +1,10 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const messages: Record<string, string> = {
+  invalid_export_selection: "商品を1件以上選択してください。商品IDの形式または重複も確認してください。",
+  export_product_limit: "一括出力は20商品までです。選択数を減らしてください。",
+  export_image_limit: "一括出力の画像は合計200枚までです。対象商品を減らしてください。",
+  export_size_limit: "登録済み画像サイズの合計が1GiBを超えています。対象商品を減らしてください。",
   invalid_attribute_group: "グループ名は1〜80文字で入力し、改行・制御文字は使わないでください。グループIDも確認してください。",
   duplicate_attribute_group_name: "このグループ名はすでに登録されています。アーカイブ済みのグループも確認してください。",
   attribute_group_not_found: "グループが見つかりません。最新情報を読み込み直してください。",
@@ -10,6 +14,7 @@ const messages: Record<string, string> = {
   export_blocked: "安全に読み取れない画像があります。問題を修正してプレビューを再読み込みしてください。",
   export_warning_required: "現在のプレビューの警告を確認してからエクスポートしてください。",
   csv_formula_risk: "CSVで数式として扱われる文字列があるため出力を中止しました。",
+  batch_csv_formula_risk: "CSVで数式として扱われる文字列があるため、一括出力全体を中止しました。",
   export_image_invalid: "画像のサイズ・SHA-256または安全性を確認できないため、出力全体を中止しました。",
   export_destination: "出力先を利用できません。アプリ保存領域やリンク以外のフォルダーを選択してください。",
   export_collision: "同名の完成フォルダーが存在します。別の親フォルダーを選択してください。既存の出力は上書きしていません。",
@@ -47,6 +52,9 @@ const messages: Record<string, string> = {
 export function errorMessage(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
   const columns: Record<string, string> = { "product.sku": "SKU", "product.title": "出品候補タイトル", "product.description": "公開用説明文", "attributes.name": "カスタム項目名", "attributes.value": "カスタム値", "attributes.unit": "単位" };
+  if (code === "batch_csv_formula_risk" && typeof error === "object" && error !== null && "product_id" in error && "column" in error) {
+    return `${messages[code]} 対象商品UUID：${String(error.product_id)}、対象：${columns[String(error.column)] ?? "CSV文字列"}。入力を確認してください。`;
+  }
   if (code === "csv_formula_risk" && typeof error === "object" && error !== null && "column" in error) {
     return `${messages[code]} 対象：${columns[String(error.column)] ?? "CSV文字列"}。入力を確認してください。`;
   }

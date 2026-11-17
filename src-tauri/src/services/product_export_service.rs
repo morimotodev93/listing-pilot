@@ -61,21 +61,7 @@ pub(crate) fn export_with(
     let snapshot = preview::snapshot(database, &input.product_id)?;
     let p = preview::build(snapshot.clone(), media);
     validate(&p, input)?;
-    export_csv::uuid(&p.product_id)?;
-    let files = snapshot
-        .images
-        .iter()
-        .enumerate()
-        .map(|(i, image)| {
-            let path = media.image_path(image)?;
-            let ext = path
-                .extension()
-                .and_then(|v| v.to_str())
-                .ok_or(AppError::ExportImageInvalid)?;
-            Ok(format!("images/{:04}-{}.{ext}", i + 1, image.id))
-        })
-        .collect::<Result<Vec<_>, AppError>>()?;
-    let csv = export_csv::generate(&p, &snapshot, &files)?;
+    let prepared = prepare(&snapshot, &p, media)?;
     // UUID avoids all user-controlled Windows filename hazards. Stable per day
     // makes repeated exports an explicit collision, never an overwrite.
     let target = parent.join(format!(
@@ -86,18 +72,7 @@ pub(crate) fn export_with(
     let mut workspace = Workspace::new(&parent)?;
     let operation = (|| {
         workspace.images()?;
-        for (name, content) in ["product.csv", "attributes.csv", "images.csv"]
-            .iter()
-            .zip(csv)
-        {
-            let mut file = workspace.file(name)?;
-            file.write_all(content.as_bytes())
-                .map_err(|_| AppError::ExportWrite)?;
-            file.sync_all().map_err(|_| AppError::ExportWrite)?;
-        }
-        for (image, relative) in snapshot.images.iter().zip(&files) {
-            media.copy_original(image, &mut workspace.file(relative)?)?;
-        }
+        write_product(&mut workspace, None, &snapshot, &prepared, media)?;
         before_finish();
         // A short IMMEDIATE transaction prevents other SQLite connections from
         // writing even in WAL mode. No image I/O occurs under this mutex.
@@ -129,7 +104,63 @@ pub(crate) fn export_with(
         folder: target.to_string_lossy().into_owned(),
         product_count: 1,
         attribute_count: p.attributes.len(),
-        image_count: files.len(),
+        image_count: prepared.files.len(),
         has_warnings: p.status == ListingStatus::Warning,
     })
+}
+
+// Shared by single and batch output: identical CSV generation and original validation.
+pub(crate) struct PreparedProduct {
+    pub files: Vec<String>,
+    pub csv: [String; 3],
+}
+
+pub(crate) fn prepare(
+    snapshot: &preview::Snapshot,
+    p: &crate::domain::listing_preview::ListingPreview,
+    media: &MediaStorage,
+) -> Result<PreparedProduct, AppError> {
+    export_csv::uuid(&p.product_id)?;
+    let files = snapshot
+        .images
+        .iter()
+        .enumerate()
+        .map(|(i, image)| {
+            let path = media.image_path(image)?;
+            let ext = path
+                .extension()
+                .and_then(|v| v.to_str())
+                .ok_or(AppError::ExportImageInvalid)?;
+            Ok(format!("images/{:04}-{}.{ext}", i + 1, image.id))
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    let csv = export_csv::generate(p, snapshot, &files)?;
+    Ok(PreparedProduct { files, csv })
+}
+
+pub(crate) fn write_product(
+    workspace: &mut Workspace,
+    product_id: Option<&str>,
+    snapshot: &preview::Snapshot,
+    prepared: &PreparedProduct,
+    media: &MediaStorage,
+) -> Result<(), AppError> {
+    let relative = |name: &str| match product_id {
+        Some(id) => format!("{id}/{name}"),
+        None => name.to_owned(),
+    };
+    for (name, content) in ["product.csv", "attributes.csv", "images.csv"]
+        .iter()
+        .zip(&prepared.csv)
+    {
+        let mut file = workspace.file(&relative(name))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| export_storage::write_error("csv_write", &e))?;
+        file.sync_all()
+            .map_err(|e| export_storage::write_error("csv_sync", &e))?;
+    }
+    for (image, name) in snapshot.images.iter().zip(&prepared.files) {
+        media.copy_original(image, &mut workspace.file(&relative(name))?)?;
+    }
+    Ok(())
 }

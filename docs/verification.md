@@ -1,5 +1,160 @@
 # 開発環境の検証結果
 
+## Phase 4.6 レビュー後の2点修正（2026-11-17 日本時間）
+
+変更対象はbatch_export_service、AppError、日本語エラー表示、ProductList、関連Rustテストと本記録だけ。
+前回提出した作業ツリーを維持し、単品エクスポートのAPI・CSV・エラー契約は変更していない。
+
+- 一括のCSV事前検査でだけ `CsvFormulaRisk` を `BatchCsvFormulaRisk` へ変換する。
+  IPCは `{code:"batch_csv_formula_risk",product_id:商品UUID,column:問題列}`。
+  表示に対象商品UUIDと日本語の列名を含め、元の数式文字列・ローカルパスは含めない。
+  他のエラーはそのまま伝播する。単品の `{code:"csv_formula_risk",column:問題列}` は維持する。
+- グループ取得失敗時は空の選択肢一覧と同時にgroupFilterを空へ戻す。
+  成功応答でも選択中UUIDが存在しなければ同様に「すべてのグループ」へ戻す。
+  有効なUUIDは改名・再取得後も保持する。選択済み商品Setは変更しない。
+
+### 修正後のチェック
+
+| 確認 | 結果 |
+|---|---|
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了0。**176 passed / 0 failed / 0 ignored**、main/doc-test各0件。既存175件を維持し、新規1件を追加 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 成功 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 成功 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 成功、警告なし |
+| `npm run build` | 終了0。TypeScript両設定とVite本番ビルド成功、39 modules |
+| `git diff --check` | 成功 |
+
+既存の数式リスク全体停止テストを商品UUID・列の厳密な照合に強化した。
+新規テストではSKU・公開説明文の問題列と商品UUIDをJSONで検査し、同じ商品を単品出力した際の
+従来エラーJSONが変わらないことも実サービスで確認する。全体停止・出力先が空・DB不変性も維持した。
+Viteの初回はサンドボックス内でspawn EPERMとなり、同じコマンドを必要な権限で再実行して成功した。
+
+### 実WebView2での修正箇所の確認
+
+verificationスキルの既存方針に従い、新規 `.verification/phase46-review1/data` だけに保存先を限定した。
+`npm run tauri dev -- --config .verification/phase46-review1/dev-config.json` で起動し、接続時にPath IPCを照合。
+通常LocalData・前回検証データは変更せず、新規の2商品・1グループだけを使用した。
+
+- 改名・正常再取得では同じグループUUIDの絞り込みを保持し、表示中1件／非表示1件の選択を保持。
+- グループ一覧応答だけを取得エラーへ限定注入。選択欄は「すべてのグループ」、実表示は2件、選択済み2件のまま。
+- 成功応答から現在のグループだけを除く限定注入でも、選択肢と表示が同時に全グループへ戻る。復帰後も選択UUIDを保持。
+- 全グループへ戻った後の「表示中の選択を解除」「表示中をすべて選択」が実際の2商品に作用する。
+- 実Rust IPCと一括確認UIから数式エラーを起こし、問題商品のUUIDと「出品候補タイトル」を表示。
+  正常商品のUUIDと元の数式文字列はエラー文に含まず、古い候補は無効化される。
+- UUIDの入力順を逆にしても同じ商品・列を返す。単品の従来日本語数式エラー文も完全一致。
+- 最終シナリオのJavaScript例外・ブラウザーログerrorは各0件、CSP違反の記録なし。
+
+証跡は `.verification/phase46-review1/result.json`、`groups-failed-all-visible.png`、`batch-formula-product.png`。
+フォルダー選択より前に止まる数式エラーと一覧絞り込みの確認に限定し、今回の修正後はRelease／インストーラーを再生成していない。
+前回の全出力・再起動検証は以下の記録のとおりで、今回は再実行していない。
+レビュー成果物は `.review/phase46-review1-20261117/`。Commit・Pushは行っていない。
+
+## Phase 4.6 一括エクスポート（2026-11-17 日本時間）
+
+開始時HEADは指定の `1a20c79`、作業ツリーはクリーン。変更前のRust **158件成功・失敗0**を確認した。
+商品選択、所属グループ絞り込み、一括確認／警告承認、全件成功方式の汎用CSV・原本画像出力を追加した。
+単品のCSV生成と原本コピーを共用し、単品API・トークン・CSV契約を維持する。
+Schema Version 5、Migration、依存ロック、CSP、Capabilities、Asset Protocolに変更はない。
+設計は [ADR 0012](decisions/0012-batch-product-export.md) を参照。
+
+### 最終変更後の自動チェック
+
+| 確認 | 観測結果 |
+|---|---|
+| `npm run build` | 終了0。TypeScript両設定・Vite本番ビルド成功、39 modules |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 成功、指摘なし |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 成功 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 成功、指摘なし |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | **175 passed / 0 failed / 0 ignored**、main/doc-test各0件 |
+| `npm run tauri build` | 終了0。通常設定のRelease EXE・MSI（3.62MiB）・NSIS（2.59MiB）を生成 |
+| `git diff --check` | 成功、空白エラーなし |
+
+Releaseは最適化ビルド2分51秒で成功した。生成先は `src-tauri/target/release/listing-pilot.exe`、
+`src-tauri/target/release/bundle/msi/Listing Pilot_0.1.0_x64_en-US.msi`、
+`src-tauri/target/release/bundle/nsis/Listing Pilot_0.1.0_x64-setup.exe`。
+インストーラーは実行・配布していない。既存identifierの末尾 `.app` に対するmacOS向け警告は従来どおりで、変更していない。
+
+Vite初回はサンドボックスの子プロセス制限による `spawn EPERM`。必要な実行権限で同じコマンドが成功した。
+この回避のためのコード・依存・環境設定の変更はしていない。
+
+新規Rustテスト17件は既存単品Fixtureの子モジュールとして追加し、OS一時ディレクトリの専用DB・media・出力先だけを使う。
+以下を検証した。
+
+- 0件・重複・不正／非正規UUID・不在商品・商品件数上限、入力順非依存トークン、対象集合変更、警告承認不足。
+- 画像200枚と1GiBの境界／超過、不正サイズ、checked_addによる集計。境界値にはメモリ上のSnapshotを使い、1GiBを実コピーしていない。
+- 2商品、繰り返し出力のバッチUUID相違、単品出力との3CSVのバイト一致、BOM・CRLF・引用符・NULL／0・内部メモ非公開の既存回帰。
+- 別グループ同名属性のUUID区別、旧グループ／非表示値除外、負数・先頭ゼロ・小数精度保持。
+- ready／warning混在、画像なし商品の承認後出力、JPEG・PNG・WebPの原本バイト・画像順・メイン画像。
+- CSV数式リスクの商品が1件でもあれば事前検査で全体停止、画像欠落時blockedと復元後の旧トークン拒否。
+- 商品・画像順・属性定義・値・グループ名／所属変更による旧確認拒否。
+- 別SQLite接続から出力中に更新し、最終全商品再照合で完成公開を拒否。コピー段階でDB Mutexを保持しないことも確認。
+- 2商品目の画像ハッシュ不一致で1商品目を含め全ステージングを清掃、サイズ不一致、出力前後のDB不変性。
+- 固定レイアウト以外のパス・ADS・traversal拒否、create_new、既存完成先衝突と内容保持。
+- 未知の入れ子ファイルによる清掃失敗で元エラー／残存場所を返す。入れ子junctionは書き込みも清掃も拒否し、リンク先を保持。
+- 確定直前にステージングを別名へ移動させ、結果不明として清掃せず原本出力を保持する。
+
+既存158件は削除せずすべて回帰実行した。既存単品の画像検証・媒体ロック・衝突・清掃・Migration・グループ保存テストも成功している。
+
+### 実Tauri / WebView2
+
+`npm run tauri dev -- --config .verification/phase46/dev-config.json` を使用した。
+`appDirectoriesOverride` を新規の `.verification/phase46/data` に限定し、CDP接続ごとにPath IPCの返却先が
+この専用領域であることを照合した。通常のLocalDataは開いていない。
+CDPでReactのボタン・入力を操作し、Rust IPC・SQLiteをモックせず読み戻した。
+ネイティブ画像選択・フォルダー選択・キャンセルはWindows UI Automationで操作した。
+
+| シナリオ | 観測結果 |
+|---|---|
+| 選択と絞り込み | すべて／所属グループ切替、表示中だけの全選択／解除、非表示選択の保持、全解除、0件出力無効が成功 |
+| 改名・一覧再取得 | グループ改名後も選択UUIDを保持。一覧外で削除した選択商品を再読込で除外し、残り2件の選択を保持 |
+| 全商品確認 | SKU・商品名・所属・ready／warning混在・候補・現在属性・画像合計2枚を確認。旧グループ値を含まない |
+| 二重送信 | 同一評価内で開始ボタンを2回押下してプレビューIPCは1回。StrictModeのEffect再実行でも再送なし。出力ボタン2回でもIPCは1回 |
+| 操作固定 | プレビュー読込を保留した間と出力中は戻る／再読込が無効。確認画面では一覧選択を変更できず、項目設定はinert |
+| warning | 未承認の出力は無効。明示承認後だけ出力可能。フォルダー選択キャンセル・再読込・一覧へ戻って再入場で承認解除 |
+| 取得失敗 | プレビュー応答だけをエラーへ限定注入。古い候補を表示せず、日本語エラーと明示再読込で復帰 |
+| 実一括出力 | ネイティブ選択からOS専用一時フォルダーへ2商品を1つの完成フォルダーとして出力。商品数・属性数・画像数・出力先を画面表示 |
+| 出力内容 | 商品UUID別の3CSV、BOM・CRLF終端・引用符・現在属性・Number精度、PNG2枚のバイト／SHA-256・順序を照合 |
+| 不変性 | 出力前後の商品一覧・編集スナップショット・画像メタデータ一致。管理原本と取り込み元のハッシュも一致 |
+| 確認後の変更 | 別IPCで商品タイトルを更新後、UI出力がダイアログ前に拒否。候補を無効化し、日本語エラー・最新再確認へ誘導 |
+| 実blocked | 専用データの登録済み画像を一時的に欠落させ、実Rustプレビューのblockedと全体出力無効を確認。直後に同じバイトを戻し復帰 |
+| 出力失敗後の再操作 | 監視中リポジトリ内では最終移動が失敗、ステージングの全清掃と日本語エラーを確認。再読込後にOS一時フォルダーへ成功 |
+| 再起動 | 自分が起動したテストアプリだけをCloseMainWindow＋WaitForExitで正常終了。同じ隔離設定で再起動し、商品・全値・定義・画像メタデータ・元画像ハッシュ一致 |
+| 再起動後の選択 | セッション内選択は0件へ戻り、改名済みグループと商品を表示。新規一括確認で警告承認が必要 |
+| 実行時エラー | 成功した最終integration／additional／restartシナリオで捕捉JavaScript例外・ブラウザーログerrorは各0件。CSP違反の記録なし |
+
+検証スクリプトの初期試行にはセレクターとIPC回数計測の誤りがあり、修正して再実行した。
+終了用IPCは既存の権限で拒否されたため、権限を追加せずOSの正常ウィンドウ終了を使用した。
+これらの検証操作由来のエラーは、最終アプリ操作シナリオの結果と区別している。
+
+証跡はGit除外の `.verification/phase46/` に保存した。
+`baseline.json`、`diagnostic.json`、`integration-result.json`、`additional-result.json`、`restart-result.json`、
+`batch-preview.png`、`batch-success.png`、`batch-blocked.png`、`restart.png` を参照。
+開発監視はテスト用WebView2キャッシュに対するEBUSYも出したが、IPC・データ照合は成功している。
+
+### 既知のexport_write調査
+
+変更前の既存単品エクスポートで、監視中の `.verification/phase46/baseline-out` では `export_write`、
+OS専用一時フォルダーでは成功を再現した。単品基準商品は画像0枚。
+追加した内部診断（段階名・ErrorKind・OS番号だけでパスや商品情報を含めない）では
+`Export stage=final_move kind=PermissionDenied os=Some(5)` を観測した。
+ステージング作成・CSV書き込み／syncは完了し、最終非置換移動で失敗、清掃後の親は空だった。
+一括でも画像2枚のコピーを含め同じ最終移動エラーを再現し、全清掃後に別の一時フォルダーで再試行成功した。
+
+観測上は監視中のリポジトリ配下に依存する。監視プログラム等のハンドル競合は可能性であり、
+具体的なロック元や一時的アクセス拒否の根本原因は未確定。パス検証・Windows移動フラグ・権限を緩和していない。
+開発時はリポジトリ外の専用フォルダーを使う。管理DB・管理mediaへの出力は禁止のまま。
+
+### 残る確認範囲
+
+- 実ディスク容量不足・電源断・強制終了時のファイルシステム耐久性、ネットワークドライブ、他PC。
+- 上限に近い実画像200枚・合計1GiBの長時間コピー。上限判定は合成Snapshotで検証済み。
+- 実画面でのJPEG／WebP一括出力は未実施（Rustでは両形式のバイト一致を確認）。
+- 清掃失敗・移動結果不明はRustで模擬し、UIの実OS障害としては再現していない。
+- 通常設定のRelease EXEでの実操作、本番CSP下の今回の一括フロー、インストーラー導入・更新・アンインストール。
+- 同一ユーザーの任意のファイル差し替え攻撃全般への耐性は既存モデルの範囲。電源断後の出力ステージング自動清掃は追加していない。
+
+Commit・Push・リリース公開は行わない。レビュー成果物は `.review/` に置き、コードレビューとユーザー手動テストを待つ。
+
 
 ## Phase 4.5.2 第2回レビュー後の軽微改善（2026-11-17 日本時間）
 

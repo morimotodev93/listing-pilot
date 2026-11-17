@@ -22,6 +22,9 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "batch_export_tests.rs"]
+mod batch;
+
 struct Fixture {
     media: MediaStorage,
     db: Database,

@@ -1,6 +1,7 @@
 pub mod attribute_group_service;
 pub mod attribute_service;
 pub mod attribute_value_service;
+pub mod batch_export_service;
 pub mod image_service;
 pub mod listing_preview_service;
 pub mod product_deletion_service;
