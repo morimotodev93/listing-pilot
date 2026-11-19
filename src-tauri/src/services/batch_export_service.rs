@@ -36,7 +36,10 @@ pub(crate) fn normalize(ids: &[String]) -> Result<Vec<String>, AppError> {
     Ok(ids)
 }
 
-fn read(database: &Database, ids: &[String]) -> Result<Vec<preview::Snapshot>, AppError> {
+pub(crate) fn read(
+    database: &Database,
+    ids: &[String],
+) -> Result<Vec<preview::Snapshot>, AppError> {
     database.with_mut(|db| {
         let tx = db.transaction()?;
         let snapshots = ids

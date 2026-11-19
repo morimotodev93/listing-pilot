@@ -119,6 +119,9 @@ impl Workspace {
 
 // Fixed export layout only. No arbitrary paths, user filenames or platform separators.
 fn validate_file(relative: &str) -> Result<(), AppError> {
+    if relative == "shopify-products.csv" {
+        return Ok(());
+    }
     let parts: Vec<_> = relative.split('/').collect();
     let parts = if parts.len() > 1 && Uuid::parse_str(parts[0]).is_ok() {
         if !canonical_uuid(parts[0]) {

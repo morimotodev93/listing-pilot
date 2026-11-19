@@ -57,6 +57,18 @@ pub fn get(
 }
 
 pub(crate) fn build(snapshot: Snapshot, media: &MediaStorage) -> ListingPreview {
+    build_with(snapshot, |image| media.preview(image))
+}
+
+// CSV-only profiles reuse candidates and token construction without touching image files.
+pub(crate) fn build_for_csv(snapshot: Snapshot) -> ListingPreview {
+    build_with(snapshot, |_| None)
+}
+
+fn build_with(
+    snapshot: Snapshot,
+    image_path: impl Fn(&crate::domain::image::ProductImage) -> Option<String>,
+) -> ListingPreview {
     // Opaque, process-version-local identity; no internal data is sent to React.
     let mut hash = Sha256::new();
     hash.update(format!("{snapshot:?}"));
@@ -97,7 +109,7 @@ pub(crate) fn build(snapshot: Snapshot, media: &MediaStorage) -> ListingPreview 
     let images: Vec<_> = images
         .into_iter()
         .map(|image| ListingPreviewImage {
-            preview_path: media.preview(&image),
+            preview_path: image_path(&image),
             image_id: image.id,
             sort_order: image.sort_order,
         })

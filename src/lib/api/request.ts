@@ -1,6 +1,9 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const messages: Record<string, string> = {
+  shopify_csv_size_limit: "Shopify用CSVは15MB未満にしてください。対象商品を減らしてください。",
+  shopify_export_blocked: "価格未設定などの問題があるためShopify用CSVを出力できません。修正後に再読み込みしてください。",
+  shopify_csv_formula_risk: "CSVで数式として扱われる文字列があるためShopify用CSVを出力できません。",
   invalid_export_selection: "商品を1件以上選択してください。商品IDの形式または重複も確認してください。",
   export_product_limit: "一括出力は20商品までです。選択数を減らしてください。",
   export_image_limit: "一括出力の画像は合計200枚までです。対象商品を減らしてください。",
@@ -52,7 +55,9 @@ const messages: Record<string, string> = {
 export function errorMessage(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
   const columns: Record<string, string> = { "product.sku": "SKU", "product.title": "出品候補タイトル", "product.description": "公開用説明文", "attributes.name": "カスタム項目名", "attributes.value": "カスタム値", "attributes.unit": "単位" };
-  if (code === "batch_csv_formula_risk" && typeof error === "object" && error !== null && "product_id" in error && "column" in error) {
+  if ((code === "batch_csv_formula_risk" || code === "shopify_csv_formula_risk") && typeof error === "object" && error !== null && "product_id" in error && "column" in error) {
+    const shopifyColumns: Record<string, string> = { Title: "出品タイトル", Description: "公開説明文", Vendor: "Vendor（ブランド）", SKU: "SKU" };
+    if (code === "shopify_csv_formula_risk") return `${messages[code]} 対象商品UUID：${String(error.product_id)}、対象：${shopifyColumns[String(error.column)] ?? "CSV文字列"}。入力を確認してください。`;
     return `${messages[code]} 対象商品UUID：${String(error.product_id)}、対象：${columns[String(error.column)] ?? "CSV文字列"}。入力を確認してください。`;
   }
   if (code === "csv_formula_risk" && typeof error === "object" && error !== null && "column" in error) {

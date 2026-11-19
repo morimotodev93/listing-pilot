@@ -1,5 +1,102 @@
 # 開発環境の検証結果
 
+## Phase 5.1 Shopify Dev Store受入テスト成功（2026-11-19 報告・日本時間）
+
+ユーザーから、Listing Pilotで2商品のShopify用CSVを出力し、Dev Storeへインポート後、
+Shopifyの再エクスポートCSVと照合して受入テストが成功したとの報告を受けた。
+以下はユーザー実施・照合の結果であり、CodexがShopifyを操作したり、再エクスポートCSVを直接確認した結果ではない。
+
+| SKU | 価格 | Status | 公開状態 |
+|---|---|---|---|
+| `LP-P51-MUG-002` | 0円 | `draft` | 非公開 |
+| `LP-P51-DISH-002` | 1,200円 | `draft` | 非公開 |
+
+- 商品名・日本語説明文・ブランド・SKU・Handleが正常で、再エクスポートCSVとの照合でも一致した。
+- Option1は `Title / Default Title`、Option2・Option3は空欄だった。
+- 画像を含めない仕様も維持されていた。
+
+これにより、下記2026-11-17の記録でユーザー担当・未実施としていた本実装CSVのDev Storeインポート／再エクスポートは、
+上記2商品について受入成功となった。以前の記録は当時の検証状況として保持する。
+ストア通貨設定の確認方法、既存Handleの上書き設定、インストーラー・別PC・障害復旧については、今回の報告から追加の検証済み事項とはしない。
+今回は本記録のみ追記し、コードは変更していない。文書のみの変更のためRust／TypeScriptのビルド・テストは再実行していない。
+
+## Phase 5.1 Shopify専用CSV（2026-11-17 日本時間）
+
+開始HEADは `ee30fafbb8f188f31f20a42567a3186bf311ef00`。開始時の既存変更は未追跡のADR 0013のみ。
+ADR案を仕様として保持し、状態と実装上の共通化／確認状況を追記した。Commit・Push・branch操作は実施していない。
+Schema Version 5、Migration、依存／ロック、識別子、CSP・Asset Protocol・Capabilitiesは変更していない。
+
+### 最終ソース状態での自動確認
+
+| コマンド | 結果 |
+|---|---|
+| `npm run build` | 終了0。TypeScript両設定・Vite本番ビルド成功、41 modules |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了0、警告なし |
+| `cargo test --manifest-path src-tauri/Cargo.toml --quiet` | 終了0。**191 passed / 0 failed / 0 ignored**、main／doc-test各0件 |
+| `git diff --check` | 終了0、空白エラーなし（GitのLF→CRLF通知あり） |
+
+既存176件を維持し、Shopify用15件を追加した。固定10列・UUID順・1商品1行、全セル引用符、
+日本語／カンマ／引用符／説明文改行を独立CSVリーダーで往復し、実ファイルのBOMなし・LFを確認。
+管理メモ非流出、0円／NULL価格、タイトルフォールバックと説明文warning、Vendor空欄、
+1〜20件／不正UUID・重複・欠落商品・21件、未知入力フィールド拒否を確認した。
+SKU・Title・Description・Vendorの先頭空白／不可視文字／各行の数式開始文字をプレビューと実行で拒否する。
+DB制約が許さない先頭ASCII空白は候補スナップショット単位で検査し、制約を緩和していない。
+
+集合順序非依存、Handleの改名／SKU変更非依存、単品・汎用一括トークンとの分離、warningToken必須、
+商品・公開文章・価格・ブランド変更、ダイアログ後・確定直前の別SQLite接続変更を検査した。
+最終照合前にDB Mutexが解放されていること、途中失敗時の全ステージング清掃、既存宛先非置換、
+未知ファイル保持と清掃失敗の通知、確定結果不明時のCSV保持、管理領域への出力拒否も確認した。
+画像0枚と原本欠落でも実出力成功。201画像／2GiBメタデータは候補単位で汎用上限非適用を確認した。
+15MB未満の厳密な境界と日本語UTF-8実バイト長の超過拒否を確認。既存単品／一括全テストも成功。
+
+初回テストは190成功／1失敗（先頭空白SKUが既存DB制約で拒否されたテスト設定の誤り）。
+設定を修正し全191件成功後、最終ソース状態で再実行して全191件成功した。
+初回Clippyのテスト内clone指摘5箇所は修正済み。Viteの初回はsandboxのspawn EPERMで失敗し、
+コード・依存を変えず必要な権限で同じコマンドを再実行して成功。最終実行も成功した。
+
+### 実Tauri／WebView2
+
+`npm run tauri dev -- --config .verification/phase51/dev-config.json` を実行した。
+新規 `.verification/phase51/data` へappDirectoriesOverrideを限定し、CDP接続時にPath IPCの返却先を照合。
+通常LocalDataや以前の検証データは使用せず、新規3商品／1グループを既存Rust IPCで作成した。
+Reactボタン・チェック・グループ選択を実WebView2で操作し、ネイティブ選択／キャンセルはWindows UI Automationを使用。
+
+| 確認した境界・場面 | 観測結果 |
+|---|---|
+| 一覧 → Shopify確認 | グループをまたいだ2商品のUUID選択を保持。0件は無効。二重クリック・StrictModeでもプレビューIPCは1回 |
+| 確認UI → Rust候補 | 管理名フォールバック／説明文未設定の警告、SKU・タイトル・Vendor・価格・Handleを表示。画像Issue・管理メモを表示しない |
+| 確認の独立性 | 警告だけを承認してもJPY確認までは出力不可。画像0枚のready商品でもJPY確認が必要 |
+| 出力中の操作 | 二重クリックでも出力IPCは1回。戻る／再読込は無効、カスタム項目設定はinert |
+| キャンセル／再入場 | ネイティブキャンセルを独立表示。警告と通貨の両確認を解除。再読込・一覧へ戻って再入場でも解除 |
+| 古い確認 | 実IPCで公開タイトルを変更後、出力をダイアログ前に拒否。候補を消して再読込と再確認へ誘導 |
+| CSV生成 → 結果表示 | 2商品と1商品の両方で実出力成功。リポジトリ外の専用OS一時フォルダーに完成フォルダー1つ・CSV1つを生成し商品件数／場所を表示 |
+| 出力内容 → 読戻し | BOMなしUTF-8・LF、日本語・引用符・説明文改行を確認。商品一覧は出力前後で完全一致 |
+| blocked | 価格NULL商品は両確認後も出力不可。0円商品は成功したCSVに含む |
+| 数式リスク | Vendorの数式文字列を実Rustプレビューで拒否。UUIDと日本語の列名を表示し、原文を出さない。明示再読込で復帰 |
+| 既存汎用経路 | 実UIから汎用一括・単品もそれぞれ出力成功。汎用CSVのBOM＋CRLFを確認 |
+| 実行時ログ | integrationシナリオのJavaScript例外0・ブラウザーログerror 0、CSP違反の記録なし |
+
+出力親はOS一時領域の新規 `listing-pilot-phase51-ui-*`。監視中リポジトリ内のWindowsエラー5を
+解決済みとは扱わず、安全検証・権限・非置換確定は緩和していない。
+開発監視ログには隔離WebView2のロックファイルに対するEBUSYが記録されたが、CSV出力と上記操作は成功した。
+シナリオ完了後のclose IPCは既存Capabilitiesにより拒否された。権限を追加せず、起動したPIDと実行パスを
+照合してCloseMainWindowで通常終了（WaitForExit成功）し、開発セッションを停止した。
+この後片付け時の拒否はintegrationのエラー0件とは分けて記録する。
+
+証跡は `.verification/phase51/result.json`、`csv-audit.json`、`two-product-preview.png`、
+`two-product-success.png`、`null-price-blocked.png`、`formula-vendor-error.png`。
+最終ソースの変更はProductListの字下げのみで、その後にTypeScript／ViteとRustの全チェックを再実行した。
+
+### 未検証と引継ぎ
+
+本実装CSVのShopify Dev Storeインポート／再エクスポートはユーザー担当で未実施。ストア通貨の照会も行っていない。
+JPY確認・一致Handle上書きオフを前提に、新規テスト用2商品CSVと期待値をレビュー提出先へ同梱する。
+インストーラー／Release・別PC・ネットワーク共有・電源断／実ディスク障害は今回未検証。
+今回のCSV追加ではMigration・媒体管理やインストーラー設定を変更しておらず、`npm run tauri build` は実行していない。
+レビュー成果物は `.review/phase51-20261117/` の差分パッチ・新規ファイルZIP・SHA-256 manifest・日本語実装報告書。
+
 ## Phase 4.6 レビュー後の2点修正（2026-11-17 日本時間）
 
 変更対象はbatch_export_service、AppError、日本語エラー表示、ProductList、関連Rustテストと本記録だけ。

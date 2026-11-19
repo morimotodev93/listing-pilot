@@ -3,6 +3,27 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
+## Phase 5.1 Shopify専用CSV
+
+ProductList → ShopifyExport → lib/api/shopifyExport.ts → commands/product_export.rs → shopify_export_service。
+既存の一覧選択・グループ絞り込み・確認中の操作固定を使い、汎用出力とは別アクションを提供する。
+入力はcamelCase／未知フィールド拒否。`get_shopify_export_preview` と `export_shopify_products` を追加した。
+警告は現在のトークンへ結び付け、JPY確認は独立した必須チェックにする。再読込・終了・失敗で両確認を解除する。
+
+batch_export_serviceから共有するのはUUID正規化と全件の単一読取トランザクションだけ。
+listing_preview_serviceの候補／トークン生成を小さなbuild_withへ抽出し、build_for_csvでは画像パスの解決を行わない。
+既存buildの画像チェック・トークンは維持し、Shopify DTOには画像Issue・属性・グループ・内部メモを含めない。
+Shopifyトークンは `ListingPilot-shopify-csv-v1\0` ドメインと正規順序のUUID／候補トークンから導出する。
+画像メタデータの変更では失効し得るが、画像ファイルの存在・可読性には依存しない。
+
+shopify_csvが固定10列、全セル引用符、BOMなしUTF-8／LF、15MB未満を担当する。
+export_csv::textを共有し、タイトル・公開説明文・Vendor・SKUをプレビュー時から検査する。
+価格NULLはblocked、0は有効。ダイアログ前後に再検査し、DB Mutex解放下でCSVを書込みsync_all、
+短いIMMEDIATEで全Snapshot・宛先を再照合してWorkspace.finishを1回呼ぶ。確定後のCOMMITは行わない。
+Workspaceに追加した許可はルートのshopify-products.csvだけ。非置換・限定清掃・不明時保持を共用する。
+画像コピー／ハッシュ、200画像／1GiB上限は適用しない。Schema Version 5・依存・セキュリティ設定は維持する。
+詳細と未検証事項は [ADR 0013](decisions/0013-shopify-csv-export.md) と [検証記録](verification.md) を参照。
+
 ## Phase 4.6 複数商品の一括エクスポート
 
 ProductList → BatchExport → lib/api/productExport.ts → commands/product_export.rs → batch_export_service。

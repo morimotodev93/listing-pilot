@@ -7,6 +7,7 @@ import type { Product } from "../types";
 import { ProductForm } from "./ProductForm";
 import { ProductDetail } from "./ProductDetail";
 import { BatchExport } from "./BatchExport";
+import { ShopifyExport } from "./ShopifyExport";
 
 const yen = new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY" });
 const date = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" });
@@ -14,6 +15,7 @@ export function ProductList({ groupRevision, onBatchChange }: { groupRevision: n
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [groupFilter, setGroupFilter] = useState("");
   const [batchIds, setBatchIds] = useState<string[] | null>(null);
+  const [shopify, setShopify] = useState(false);
   const batchLock = useRef(false);
   const [groups, setGroups] = useState<AttributeGroup[]>([]);
   const [groupReload, setGroupReload] = useState(0);
@@ -56,9 +58,10 @@ export function ProductList({ groupRevision, onBatchChange }: { groupRevision: n
       return next;
     });
   }
-  function startBatch() {
+  function startBatch(forShopify = false) {
     if (batchLock.current || editLock.current || loading || error || selectedIds.length === 0) return;
     batchLock.current = true;
+    setShopify(forShopify);
     setBatchIds([...selectedIds]); onBatchChange(true);
   }
   const groupName = (id: string) => groups.find(g => g.id === id)?.name ?? "グループ情報を取得できません";
@@ -73,9 +76,12 @@ export function ProductList({ groupRevision, onBatchChange }: { groupRevision: n
     catch (error: unknown) { if (mounted.current) setEditError(error instanceof Error ? error.message : "商品を取得できませんでした。"); }
     finally { if (mounted.current) setEditing(false); editLock.current = false; }
   }
-  if (batchIds) return <BatchExport productIds={batchIds} onBack={() => {
-    batchLock.current = false; setBatchIds(null); onBatchChange(false);
-  }} />;
+  if (batchIds) {
+    const Export = shopify ? ShopifyExport : BatchExport;
+    return <Export productIds={batchIds} onBack={() => {
+      batchLock.current = false; setBatchIds(null); onBatchChange(false);
+    }} />;
+  }
   if (editor) return <ProductForm key={editor.product?.id ?? "new"} product={editor.product} onCancel={() => setEditor(null)} onSaved={() => {
     setEditor(null); setDetail(null); setNotice("商品を保存しました。"); void refresh();
   }} />;
@@ -98,7 +104,9 @@ export function ProductList({ groupRevision, onBatchChange }: { groupRevision: n
       <button type="button" className="secondary" disabled={loading || editing || !!error || visible.length === 0} onClick={() => selectVisible(true)}>表示中をすべて選択</button>
       <button type="button" className="secondary" disabled={loading || editing || !!error || visible.length === 0} onClick={() => selectVisible(false)}>表示中の選択を解除</button>
       <button type="button" className="secondary" disabled={loading || editing || selectedIds.length === 0} onClick={() => { if (!batchLock.current && !editLock.current) setSelected(new Set()); }}>すべての選択を解除</button>
-      <button type="button" disabled={loading || editing || !!error || selectedIds.length === 0} onClick={startBatch}>選択した{selectedIds.length}件を一括エクスポート</button>
+      <button type="button" disabled={loading || editing || !!error || selectedIds.length === 0} onClick={() => startBatch()}>選択した{selectedIds.length}件を一括エクスポート</button>
+      <button type="button" disabled={loading || editing || !!error || selectedIds.length === 0 || selectedIds.length > 20} onClick={() => startBatch(true)}>選択商品をShopify用CSVで出力（{selectedIds.length}件）</button>
+      {selectedIds.length > 20 && <p className="warning">Shopify用CSVは20商品まで選択できます。</p>}
     </div>
     {notice && <p className="success" role="status">{notice}</p>}
     {warning && <p className="warning" role="alert">{warning}</p>}

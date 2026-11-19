@@ -7,3 +7,4 @@ pub mod listing_preview;
 pub mod product;
 
 pub mod product_export;
+pub mod shopify_export;
