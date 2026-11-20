@@ -1,5 +1,72 @@
 # 開発環境の検証結果
 
+## Phase 6.0A テスト版 v0.1.1 の準備（2026-11-20 日本時間）
+
+開始時の `git status --short` は空、`git log -1 --oneline` は
+`27d29b4 docs: propose Shopify image URL mapping`。基準HEADは
+`27d29b4456995998cb7c07aa673c9f63b10a3c28` と一致した。
+このHEADに自アプリのversion更新だけを加えた未コミットソースから、Windows x64向けNSISを生成した。
+既存 `v0.1.0` タグのオブジェクトは作業前後とも
+`aca527839e6b5c95fe0d0365bc954fd6bdbdd63d`、参照コミットは
+`ee30fafbb8f188f31f20a42567a3186bf311ef00`。タグ操作・Commit・Push・Release公開は行っていない。
+
+`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` を0.1.1へ更新。
+`npm version 0.1.1 --no-git-tag-version --ignore-scripts`（終了0）でpackage.jsonとpackage-lock.jsonを同期し、
+`cargo metadata --manifest-path src-tauri/Cargo.toml --offline --format-version 1 --no-deps`（終了0）でCargo.lockを同期した。
+ロックファイルの差分は自アプリのversionのみ。ビルド対象の差分は5ファイル・6行のversion置換で、
+依存・機能コード・データ構造・identifier・CSP・capabilitiesに変更なし。
+
+環境はWindows x64、Node.js 24.16.0、npm 11.13.0、Rust／Cargo 1.99.1、
+host `x86_64-pc-windows-msvc`。PowerShellは既存fnmプロファイルの権限エラーを避けるため、
+初回確認後はプロファイルを読み込まず実行し、プロファイルや永続環境設定は変更していない。
+
+| コマンド | 結果 |
+|---|---|
+| `npm run build` | 初回終了1、Vite設定読込のspawn EPERM。同じコマンドを制限外の通常権限で再実行し終了0、41 modules |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了0、Clippy警告なし |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了0、191 passed / 0 failed / 0 ignored、main／doc-test各0件 |
+| `npm run tauri build -- --bundles nsis` | 終了0、09:31:45.962〜09:34:55.028 JST。beforeBuildCommandのTypeScript／Viteも成功、NSISのみ1件生成 |
+| `git diff --check`（本記録追記後） | 終了0、空白エラーなし。Cargo.lockのLF→CRLF通知あり |
+
+ビルドは既知のVite子プロセス制限を避けて制限外の通常権限で実行した。
+既存identifier末尾 `.app` に関するmacOS向け警告は残るが、Windowsビルドは成功した。
+Rustテストは既存のメモリDB／UUID付き専用一時ディレクトリを使用する。
+通常のSQLite・LocalAppData・管理画像・既存検証用データは変更・削除せず、生成アプリも起動していない。
+
+新しい配布候補は次のNSISのみ。**旧0.1.0 NSIS／MSIは0.1.1の配布物として扱わない。**
+
+| 項目 | 実測値 |
+|---|---|
+| パス | `src-tauri/target/release/bundle/nsis/Listing Pilot_0.1.1_x64-setup.exe` |
+| サイズ | 2,736,769 bytes |
+| SHA-256 | `CA0B59360669DA5F7D6BDAD25796031785937C57834AFF82AD7971754F95A9D6` |
+| Authenticode | NotSigned、署名者／タイムスタンプ証明書なし |
+| FileVersion／ProductVersion | ともに `0.1.1` |
+| ProductName／FileDescription | ともに `Listing Pilot` |
+| 最終書込時刻 | 2026-11-20 09:34:54.9594993 JST、今回のビルド開始後 |
+| 対象アーキテクチャ | Tauri出力はx64、生成アプリのPE Machineは `0x8664`（AMD64） |
+
+生成アプリ `src-tauri/target/release/listing-pilot.exe` は7,710,208 bytes、NotSigned、
+FileVersion／ProductVersionとも0.1.1、SHA-256は
+`97BE841BAB6389CE621EEB8EFD385638428D17E786251F72F8824770EC1A72E2`。
+旧0.1.0 NSIS（2,737,933 bytes、SHA-256 `13BE8AEB025EA8635EC086322125AA75B512F6A15D4A30D4CD046C3AF272868C`）と
+旧0.1.0 MSI（3,833,856 bytes、SHA-256 `462FCAA3577523D51E94ED0BD384C02B52237E6076067FA9ED26CA421A7792EB`）は
+作業前後でハッシュが一致した。MSIの再ビルドは実施していない。
+
+証跡はGit管理外の `.verification/phase60a-20261120-v011/`。
+各コマンドのログ・終了コード、ビルド時刻、成果物メタデータ、ビルド対象差分と追跡179ファイルのSHA-256を保存した。
+ビルド対象差分 `build-source.patch` のSHA-256は
+`282A42A817DC08D0DBADB3B99BF3D5C738091A3661463385A267C56396E8029B`。
+ビルド後・本記録追記前に追跡179ファイルがビルド開始時のハッシュと全件一致した。
+最終変更は上記5ファイルと本記録の計6ファイル、未追跡ファイルなし、HEADと既存タグは維持。
+
+NSISの実インストール・アンインストール、生成アプリの起動、実WebView2、別PC／VM、
+アップグレード時のデータ保持、未署名配布時のOS警告、電源断・障害復旧は今回未検証。
+**Windowsの `export_write` エラー5は未解決のまま保持する。** ビルド成功を解決の根拠とはしない。
+後続の導入検証はユーザーの判断で別途実施する必要がある。
+
 ## Phase 6.0 Windowsインストーラービルド・検証準備（2026-11-19 日本時間）
 
 対象HEADは `c01cc1d19587badb151e39d6ede6b7ef9cae9d07`（main、HEADを指すタグなし）。

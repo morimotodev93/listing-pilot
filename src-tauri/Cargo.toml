@@ -1,6 +1,6 @@
 [package]
 name = "listing-pilot"
-version = "0.1.0"
+version = "0.1.1"
 description = "Listing Pilot desktop application"
 authors = ["you"]
 edition = "2024"
