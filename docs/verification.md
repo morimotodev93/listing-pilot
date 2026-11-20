@@ -1,5 +1,71 @@
 # 開発環境の検証結果
 
+## Phase 6.0 Windowsインストーラービルド・検証準備（2026-11-19 日本時間）
+
+対象HEADは `c01cc1d19587badb151e39d6ede6b7ef9cae9d07`（main、HEADを指すタグなし）。
+開始時は未追跡の `docs/decisions/0014-shopify-image-url-mapping.md` のみで、追跡済みファイルに差分なし。
+ADR 0014を変更せず保持し、現行設定のままNSISとMSIを個別に生成した。
+**今回の範囲はビルドと検証準備まで。実インストール・アンインストール・生成アプリの起動は行っていない。**
+
+環境はWindows 11 Home 25H2 x64（10.0.26200.9974）、Rust／Cargo 1.99.1 stable/MSVC、
+Visual Studio Insiders 18.9.12023.133、MSVC 14.51.36231（link.exe 14.51.36252.0）、SDK 10.0.26100.0。
+プロファイルなしPowerShellでNode.js 24.16.0／npm 11.13.0、Tauri CLI 2.12.4、TypeScript 7.0.2、Vite 8.3.6を使用。
+既存fnmプロファイルの権限エラーを避けるためプロファイルを読み込まず、永続環境設定は変更していない。
+
+| コマンド | 結果 |
+|---|---|
+| `npm run build` | 初回終了1、Vite設定読込のspawn EPERM。制限外の通常権限で同じコマンドを再実行し終了0、41 modules |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 終了0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 終了0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 終了0、警告なし |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 終了0、191 passed / 0 failed / 0 ignored、main／doc-test各0件 |
+| `npm run tauri build -- --bundles nsis` | 終了0、11:57:40〜12:00:42 JST、181.07秒 |
+| `npm run tauri build -- --bundles msi` | 終了0、12:01:08〜12:03:59 JST、171.21秒 |
+
+既存のTypeScript専用テストスクリプト／テストファイルはなく、両TypeScript設定の型検査とViteビルドを確認した。
+RustテストのDB・画像はメモリ／UUID付き専用一時領域を使用する。通常LocalDataは対象にしていない。
+両インストーラービルドは既知のVite子プロセス制限を避け、制限外の通常権限で実行。
+identifier末尾 `.app` のmacOS向け警告あり。依存・version・identifier・CSP・capabilitiesの変更や、
+VBSCRIPT有効化・管理者権限取得・署名設定・OS設定変更は行わず、両ビルドが成功した。
+
+| 成果物 | サイズ（bytes） | SHA-256 | Authenticode |
+|---|---:|---|---|
+| `Listing Pilot_0.1.0_x64-setup.exe` | 2,737,933 | `13BE8AEB025EA8635EC086322125AA75B512F6A15D4A30D4CD046C3AF272868C` | NotSigned |
+| `Listing Pilot_0.1.0_x64_en-US.msi` | 3,833,856 | `462FCAA3577523D51E94ED0BD384C02B52237E6076067FA9ED26CA421A7792EB` | NotSigned |
+
+通常出力先はそれぞれ `src-tauri/target/release/bundle/nsis/` と `src-tauri/target/release/bundle/msi/`。
+NSISの作成／最終書込は12:00:38.7238402／12:00:41.9587976 JST、
+MSIは12:03:52.6014737／12:03:52.8850000 JST。今回のビルド開始後の生成であることを照合した。
+NSISのFileVersion・ProductVersionとMSI内部ProductVersionは `0.1.0`。
+MSI内部はProductName `Listing Pilot`、ProductLanguage `1033`、SummaryTemplate `x64;0`。
+MSIはWindows Installer COMで読み取り専用OpenDatabase（モード0）を使用し、導入／修復処理は呼んでいない。
+両成果物とも署名者・タイムスタンプ証明書なし。未署名に対するOS警告・実行可否は未確認。
+
+最終MSIビルド後の `listing-pilot.exe` は7,710,208 bytes、version 0.1.0、NotSigned、
+SHA-256 `491A20035292602CBB1FDED7A29D3A421A6ECC69D56D450F8A3C18563F6E3B5B`。
+Tauriが配布形式情報をパッチするため、MSI生成前のNSIS用EXEも別保存した。
+そのSHA-256は `9DA0C9DA7D07ED10C20C977A47D91432A968A096E169BA3921B29E2F2B9538EC`。
+
+生成スクリプトの静的確認ではNSISがcurrentUser／user権限、MSIがperMachine（内部ALLUSERS=1）。
+NSISのWebView2設定はdownloadBootstrapper。NSISにはアプリデータ削除チェックと、
+選択時にAppData／LocalAppDataのidentifier領域を再帰削除する処理がある。
+後続の隔離試験では未選択として状態を記録する。未選択時のデータ残存も実測まで保証しない。
+
+ビルド直後・本追記前に、追跡178ファイルと既存ADR／指定レビュー文書の計182ファイルを開始時SHA-256と比較し、全件一致。
+今回の追跡ファイル変更は本記録のみ。既存SQLite・media・画像原本・開発保存データにはアクセスせず、
+コード・両ロックファイル・アプリ設定を変更していない。Commit・Push・Release公開・タグ作成も行っていない。
+
+証跡はGit管理外の `.verification/phase60/build-20261119-115515/`。
+各コマンドのログ・終了コード・開始終了時刻・対象SHA、環境、旧／新成果物情報、MSI内部情報、
+変更前後のファイルハッシュ、同一ハッシュを確認した成果物コピー、NSIS／WiX生成スクリプトを保存した。
+レビュー報告・後続試験手順・本記録差分はGit管理外の `.review/phase60/`。
+
+計画のI-01〜I-12はNSIS・MSIともにすべて未実施。VMも今回作成・操作していない。
+ユーザーの成果物レビュー後、復元可能なWindows x64 VMで両形式を独立に試験する。
+実導入・初回起動・実WebView2／CSP・DBと画像の再起動保持・CSV操作・権限要求・
+アンインストール時の削除範囲とデータ残存、別PC・電源断は検証待ち。
+ビルド成功をインストール成功やPhase 6.0全体完了とは扱わない。
+
 ## Phase 5.1 Shopify Dev Store受入テスト成功（2026-11-19 報告・日本時間）
 
 ユーザーから、Listing Pilotで2商品のShopify用CSVを出力し、Dev Storeへインポート後、
