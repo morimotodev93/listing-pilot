@@ -1,5 +1,6 @@
 pub mod connection;
 pub mod image_repository;
+pub mod image_url_repository;
 pub mod migrations;
 pub mod product_repository;
 

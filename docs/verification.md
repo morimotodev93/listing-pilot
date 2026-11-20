@@ -1,5 +1,45 @@
 # 開発環境の検証結果
 
+## Phase 5.2.2A Shopify画像URL管理バックエンド（2026-11-20 日本時間）
+
+基準HEADは `ea08363`（ADR 0014設計確定）。開始時の作業ツリーはクリーン。
+Migration 0006／Schema v6、Rustの検証・Repository・Service、取得／全件保存の2つのTauri Commands、削除サービスとの整合性を実装した。
+専用React UI・一括貼付け画面・13列CSV・画像付き出力トークン・Shopify APIは未実装。コードレビュー待ちであり、Phase 5.2.2全体の完了ではない。
+
+最終ソースでの検証結果：
+
+| コマンド | 終了コード・結果 |
+| --- | --- |
+| `npm run build` | 0。TypeScript検査とVite本番ビルド成功。Viteの子プロセス制約を避けるため承認された通常権限で実行 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 0。既存191件＋新規30件＝221件成功、失敗0・無視0。main／doc testsは各0件 |
+| `git diff --check` | 0。空白エラーなし |
+
+追加30件は次を含む。SQLiteはメモリDBまたはUUID付きの専用一時ディレクトリ、mediaは同じ一時領域だけを使用した。
+
+- v5→v6移行、既存商品・画像・グループ・属性・属性値の全列／旧スキーマ保持、再適用、DDL途中失敗とforeign_key_check失敗時のロールバック。
+- Shopify CDN URLの許可・拒否、scheme／host／明示443の正規化、クエリ保持、入力値と正規化後の4,096バイト境界、重複の適用範囲、ストア正規化・境界・不正形式。
+- altの空欄・125／126／512／513文字、補助平面文字・結合文字、制御文字・改行・CSV数式拒否、入力不正時の全ストア保持。
+- URL保存・更新・解除・再接続後の永続化、登録SHA、原本・取り込み元・商品情報の不変、複数ストア／商品／platformの分離、トークンの別商品・別ストア流用拒否、変更なし保存。
+- 並べ替え後のUUID対応、画像追加・削除・順序・SHA・設定URL／alt／SHA／更新日時・未設定変更による失効、不完全／重複／不正画像集合の拒否。
+- 2行目のSQL失敗、更新の無視・予期しないトリガー変更、遅延外部キーによるCOMMIT失敗での全件保護、共通permitの競合拒否。
+- 画像／商品削除の全ストアCASCADE、他画像・他商品設定と他商品の管理原本保持、SQL／COMMIT失敗での画像・URL設定・原本の保持。
+- COMMIT結果確認時のURLだけの不整合・孤立参照・参照テーブル不明・未終了トランザクションの検出と原本保持、削除確定・URL参照なしの場合の判定。
+- camelCase、未知フィールド拒否、パス／ファイル名を返さないDTO、SQLの主キー・外部キー・長さ制約と既存RESTRICT。
+
+途中の検証では、通常サンドボックス内の `npm run build` が終了コード1（Vite設定読み込み時の `spawn EPERM`）。
+コード・依存を変えずに通常権限で再実行して成功した。初回Rustテストは214成功・2失敗（終了コード1、旧Schema v5期待値の更新漏れ）。
+またclippyでテストの不要なformat!が1件検出された（終了コード1）。修正後、最終ソースに対して上表の全チェックを実行し成功した。
+
+通常の `%LOCALAPPDATA%\com.listingpilot.app`、既存SQLite、管理原本にはアクセスしていない。アプリを起動していないため、公開済みv0.1.1のデータも移行していない。
+Schema v6はv0.1.1では開けない。実WebView2から新IPCを呼ぶ操作、専用UI、実Shopifyの画像実在・所有権・インポート、
+配布パッケージの作成・インストール、別PC、電源断・実ディスク故障は今回未検証。
+COMMITの曖昧な結果は状態を構成したテストで確認しており、実電源断による再現ではない。URLの形式検証は画像内容の一致を保証しない。
+Git差分で既存Migration 0001〜0005、依存／ロック、10列CSVと既存出力確定処理、CSP・Capabilitiesに変更がないことを確認した。
+レビュー用パッチは `.review/phase522a/` に置き、検証成果物・DB・media・build出力を含めない。Commit・Push・タグ・Release・ブランチ操作は行わない。
+
 ## Phase 6.0 Windows実インストール・アンインストール検証（2026-11-20 日本時間）
 
 対象は **v0.1.1**、コミット `01f0a1baa8d6622a984fe57aa34b0b0b39b2df0b`（`01f0a1b`）。

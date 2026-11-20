@@ -1,7 +1,36 @@
-# 商品データモデル（Phase 4.5.1）
+# 商品データモデル（Schema v6 / Phase 5.2.2A）
 
-現在のスキーマは5。0003で共通項目定義と値テーブル、0004で公開用文章の2列、0005でグループを追加する。
+現在のスキーマは6。0003で共通項目定義と値テーブル、0004で公開用文章の2列、0005でグループ、0006で画像URL対応を追加する。
 既存商品・画像の列・バイト列・参照は変更しない。以下のPhase 3.xに関する「追加しない」は当時の変更範囲を示す。
+
+## image_url_settings（Phase 5.2.2A）
+
+正本は `src-tauri/migrations/0006_create_image_url_settings.sql`。既存0001〜0005は変更しない。
+
+| 列 | 型・制約・意味 |
+| --- | --- |
+| image_id | TEXT NOT NULL、product_images(id)へのON DELETE CASCADE |
+| platform | TEXT NOT NULL、1〜32文字。今回のIPCはshopify固定 |
+| store_key | TEXT NOT NULL、15〜77文字。Rustで正規化・検証した単一ラベル.myshopify.com |
+| url | TEXT NOT NULL、正規化済みShopify CDN HTTPS URL。SQLでも接頭辞・UTF-8で1〜4,096バイト・NULなしを検査 |
+| image_sha256 | TEXT NOT NULL、64桁の小文字16進数。保存時のproduct_images.sha256 |
+| alt_text | TEXT NOT NULL、既定値は空文字。最大512 Unicodeスカラー値、単一行。SQLの長さ・NUL／CR／LF検査に加えRustで制御文字・数式を拒否 |
+| updated_at | TEXT NOT NULL、UTC RFC3339ナノ秒。変更時は以前の日時より最低1ns進める |
+
+主キーは `(image_id, platform, store_key)`、検索用インデックスは `(platform, store_key, image_id)`。
+product_idは追加せず、product_imagesへのJOINで商品範囲を確定する。同一商品・platform・store_key内の異なる画像間の
+重複URLは、Rustが全画像の保存を単一IMMEDIATEで検証して拒否する。他商品・他ストア・他platformに制限を広げない。
+URLの比較・保存には既存TauriのURLパーサーの表現を使い、クエリを除去・並べ替えない。
+
+URL空文字＋alt空文字で対応行を削除し、未設定とする。URL未設定のままaltだけを保存することはできず、入力を黙って捨てずに拒否する。
+設定の取得は画像UUID・現在順序・SHAと対応行を返し、保存時には専用スナップショットトークンと全画像集合を照合する。
+トークンは商品・platform・正規化ストア・画像UUID／順序／SHA・URL／alt／設定SHA／更新日時／未設定状態を含む。
+画像順序を変えても対応行は変えず、古い保存トークンは失効する。設定を変えない保存では更新日時を維持する。
+
+画像削除のCASCADEは全ストアの当該画像設定だけに適用する。product_images.product_idのRESTRICTと商品削除の既存順序を維持する。
+削除前後の照合とCOMMIT失敗後の参照再確認にURL対応を含め、状態不明なら原本を保持する。
+URL設定保存のCOMMIT失敗は `image_url_save_unknown` とし、成功を返さず再取得で確認する。設定操作は原本を読み書きしない。
+URLの実在・内容・ストア所有権は検証しない。専用UI・13列CSVはこの段階では未実装。
 
 ## attribute_groupsと所属（Phase 4.5.1）
 
@@ -113,8 +142,10 @@ Windowsでは通常 `%LOCALAPPDATA%\com.listingpilot.app\listing-pilot.sqlite3`�
 初回のみ保存先とDBを作成します。既存ファイルは保持し、初期化失敗を通知します。
 各接続でforeign_keys=ON、busy_timeout=5秒を設定します。
 
-`PRAGMA user_version` が0なら、IMMEDIATEトランザクション内で0001→0002→0003→0004とバージョン4まで適用します。
-1なら0002以降、2なら0003以降、3なら0004を適用し、4なら変更しません。5以上は初期化エラーにし、既存データを変更しません。
+`PRAGMA user_version` が0なら、IMMEDIATEトランザクション内で0001〜0006を順に適用し、バージョン6にします。
+1〜5なら未適用分だけを同じトランザクションで適用し、最後にforeign_key_checkを実行します。6ならスキーマを変えず再検査します。
+7以上は初期化エラーにし、既存データを変更しません。Schema v6は公開済みv0.1.1（Schema v5）では開けません。
+開発版も通常保存先を共有するため、未レビュー版を通常データで起動しないでください。今回のテストは専用一時DB・mediaだけを使用します。
 失敗時はDDLとバージョン更新をロールバックします。将来の変更は番号付きSQLを追加し、
 同じトランザクション内で順に適用する方式を拡張します。適用済みのSQLは変更しません。
 

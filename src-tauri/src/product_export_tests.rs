@@ -107,7 +107,7 @@ impl Fixture {
                 }
                 assert_eq!(
                     db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
-                    5
+                    6
                 );
                 Ok(result)
             })

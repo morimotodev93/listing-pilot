@@ -14,6 +14,8 @@ mod attribute_value_tests;
 #[cfg(test)]
 mod image_tests;
 #[cfg(test)]
+mod image_url_tests;
+#[cfg(test)]
 mod listing_content_tests;
 #[cfg(test)]
 mod listing_preview_tests;
@@ -51,6 +53,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::greet,
+            commands::image_url::get_shopify_image_urls,
+            commands::image_url::save_shopify_image_urls,
             commands::attribute_group::list_attribute_groups,
             commands::attribute_group::create_attribute_group,
             commands::attribute_group::update_attribute_group,

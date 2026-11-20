@@ -3,6 +3,31 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
+## Phase 5.2.2A Shopify画像URL管理バックエンド
+
+`commands/image_url.rs` → `services/image_url_service.rs` → `infrastructure/db/image_url_repository.rs`。
+`get_shopify_image_urls({ input: { productId, storeKey } })` と
+`save_shopify_image_urls({ input: { productId, storeKey, snapshotToken, images: [{ imageId, url, altText }] } })`を登録する。
+入力はcamelCase／deny_unknown_fields、返却はcamelCaseのproductId・platform・storeKey・snapshotToken・images。
+画像行にはimageId・sortOrder・sha256・任意のsettingを含め、パスやファイル名は返さない。
+Commandsはspawn_blockingへ委譲し、保存は共通画像permitをDB Mutexより先に取得する。
+
+domain/image_url.rsがストア正規化・URL構文・alt文字数／制御文字を検証し、Serviceは既存export_csv::textを使ってaltの数式リスクも拒否する。
+URL解析はTauriが再公開するurl::Urlを再利用し、新規依存・ネットワーク通信は追加しない。
+URL解析前にもauthorityとエスケープを検査し、保存用表現の4,096バイト上限まで確認する。altは最大512スカラー値・単一行。
+
+取得は単一読取トランザクション、保存は検証→短いIMMEDIATE→最新状態から専用トークン再計算→全画像集合照合→全件更新／解除→保存結果照合→COMMIT。
+トークンは長さ付きフィールドをSHA-256へ入力し、専用ドメイン `ListingPilot-image-url-settings-v1\0` と商品・ストア・画像順／SHA・対応行全体を含む。
+画像なしCSVや将来の画像付きCSVのトークンとは共用しない。競合は既存stale_dataを返し、再取得を要求する。
+不正入力・途中SQL失敗・保存結果不一致は全件ロールバック。COMMIT失敗／worker異常はimage_url_save_unknownで成功を断定せず、再取得を要求する。
+媒体のコピー・デコード・ハッシュ・存在検査は行わず、登録済み画像メタデータのSHAを対応行へ保存する。
+
+Migration 0006はSchema v5→v6の新しいimage_url_settingsのみを追加し、image_idの外部キーはON DELETE CASCADE。
+画像削除・商品削除は既存のpermit・原本検査・非置換隔離を維持し、事前／IMMEDIATE照合とCOMMIT失敗後の同一読取スナップショットにURL設定を含める。
+URL参照だけが残る状態や参照確認不能では隔離を進めない。product_images.product_idのON DELETE RESTRICTは変更しない。
+React専用UI・APIラッパー・画像付き13列CSVは未実装。既存の画像なし10列CSVと出力確定処理・CSP・Capabilitiesは変更しない。
+Schema v6を通常LocalAppDataへ適用する実機検証は行わない。詳細は [ADR 0014](decisions/0014-shopify-image-url-mapping.md)。
+
 ## Phase 5.1 Shopify専用CSV
 
 ProductList → ShopifyExport → lib/api/shopifyExport.ts → commands/product_export.rs → shopify_export_service。

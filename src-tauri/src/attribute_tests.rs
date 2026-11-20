@@ -131,7 +131,7 @@ fn migrate_zero_one_two_to_five_preserves_every_product_and_image_column() {
         };
         db.pragma_update(None, "user_version", initial).unwrap();
         migrations::apply(&mut db).unwrap();
-        assert_eq!(version(&db), 5);
+        assert_eq!(version(&db), 6);
         if let Some(before) = before {
             assert_eq!(product_service::get(&db, &before.id).unwrap(), before);
         }
@@ -213,7 +213,7 @@ fn version_five_reapply_restart_and_future_version_rejection_preserve_data() {
         (p, attribute, original_schema)
     };
     let mut db = connection::open(&path).unwrap();
-    assert_eq!(version(&db), 5);
+    assert_eq!(version(&db), 6);
     assert_eq!(repository::get(&db, &attribute.id).unwrap(), attribute);
     assert_eq!(product_service::get(&db, &p.id).unwrap(), p);
     assert_eq!(
@@ -224,7 +224,7 @@ fn version_five_reapply_restart_and_future_version_rejection_preserve_data() {
         .unwrap(),
         "12345678901234567890.0123456789"
     );
-    for newer in [6, 99] {
+    for newer in [7, 99] {
         db.pragma_update(None, "user_version", newer).unwrap();
         assert!(migrations::apply(&mut db).is_err());
         assert_eq!(version(&db), newer);

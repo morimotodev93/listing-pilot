@@ -7,7 +7,7 @@ use crate::{
     infrastructure::{
         db::{
             Database, attribute_value_repository as values, image_repository as images,
-            product_repository as products,
+            image_url_repository as urls, product_repository as products,
         },
         media_storage::MediaStorage,
     },
@@ -77,7 +77,7 @@ pub fn delete(
     if !valid_uuid(&input.product_id) || input.expected_image_ids.iter().any(|id| !valid_uuid(id)) {
         return Err(AppError::StaleData);
     }
-    let checked = database.with_mut(|connection| {
+    let (checked, checked_urls) = database.with_mut(|connection| {
         let transaction = connection.transaction()?;
         let product = products::get(&transaction, &input.product_id).map_err(stale_missing)?;
         let current = images::list(&transaction, &input.product_id)?;
@@ -85,8 +85,9 @@ pub fn delete(
         if values::list(&transaction, &input.product_id)? != input.expected_attribute_values {
             return Err(AppError::StaleData);
         }
+        let current_urls = urls::for_product(&transaction, &input.product_id)?;
         transaction.commit()?;
-        Ok(current)
+        Ok((current, current_urls))
     })?;
     for image in &checked {
         media.deletion_file_exists(image)?;
@@ -100,7 +101,8 @@ pub fn delete(
         if values::list(&transaction, &input.product_id)? != input.expected_attribute_values {
             return Err(AppError::StaleData);
         }
-        if current != checked {
+        if current != checked || urls::for_product(&transaction, &input.product_id)? != checked_urls
+        {
             return Err(AppError::StaleData);
         }
         values::delete_product(
@@ -123,6 +125,7 @@ pub fn delete(
         &input.product_id,
         &checked,
         &input.expected_attribute_values,
+        &checked_urls,
         commit,
     )?;
     let mut report = DeleteImageReport {
@@ -160,7 +163,9 @@ fn has_references(
         return Ok(true);
     }
     for image in checked {
-        if images::references_image_or_path(connection, image)? {
+        if images::references_image_or_path(connection, image)?
+            || urls::references_image(connection, &image.id)?
+        {
             return Ok(true);
         }
     }
@@ -172,6 +177,7 @@ pub(crate) fn resolve_commit(
     product_id: &str,
     checked: &[ProductImage],
     checked_values: &[crate::domain::attribute_value::ProductAttributeValue],
+    checked_urls: &[crate::domain::image_url::ImageUrlSetting],
     commit: Result<(), AppError>,
 ) -> Result<(), AppError> {
     if let Err(error) = commit {
@@ -188,6 +194,7 @@ pub(crate) fn resolve_commit(
                 products::get(&transaction, product_id)?;
                 if images::list(&transaction, product_id)? != checked
                     || values::list(&transaction, product_id)? != checked_values
+                    || urls::for_product(&transaction, product_id)? != checked_urls
                 {
                     return Err(AppError::ProductDeletionUnknown);
                 }

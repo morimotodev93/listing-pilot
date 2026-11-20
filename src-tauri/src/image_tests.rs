@@ -420,7 +420,7 @@ fn migration_zero_one_two_and_existing_product_preservation() {
         assert_eq!(
             db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5
+            6
         );
         assert!(repository::all(&db).unwrap().is_empty());
         if let Some(product) = product {
@@ -1507,7 +1507,12 @@ fn delete_commit_ambiguity_checks_id_path_and_unknown_database_state() {
     fixture.import_distinct(0, 1);
     let image = fixture.ordered().remove(0);
     let resolve = || {
-        image_service::resolve_delete_commit(&fixture.db, &image, Err(AppError::DatabaseOperation))
+        image_service::resolve_delete_commit(
+            &fixture.db,
+            &image,
+            &[],
+            Err(AppError::DatabaseOperation),
+        )
     };
     assert_eq!(resolve(), Err(AppError::DatabaseOperation));
     fixture
@@ -2014,7 +2019,7 @@ fn schema_two_startup_migration_keeps_registered_images_and_original_bytes() {
         .collect();
     // Reproduce the exact pre-4.1 schema inside this dedicated temporary fixture.
     fixture.db.with(|db| {
-        db.execute_batch("DROP TABLE product_attribute_values; DROP TABLE attribute_definitions; DROP TRIGGER products_require_group_insert; DROP TRIGGER products_require_group_update; DROP INDEX products_group_id; ALTER TABLE products DROP COLUMN group_id; DROP TABLE attribute_groups; ALTER TABLE products DROP COLUMN listing_title; ALTER TABLE products DROP COLUMN listing_description; PRAGMA user_version = 2;")?;
+        db.execute_batch("DROP TABLE image_url_settings; DROP TABLE product_attribute_values; DROP TABLE attribute_definitions; DROP TRIGGER products_require_group_insert; DROP TRIGGER products_require_group_update; DROP INDEX products_group_id; ALTER TABLE products DROP COLUMN group_id; DROP TABLE attribute_groups; ALTER TABLE products DROP COLUMN listing_title; ALTER TABLE products DROP COLUMN listing_description; PRAGMA user_version = 2;")?;
         Ok(())
     }).unwrap();
     let directory = fixture.temp.0.clone();
@@ -2032,7 +2037,7 @@ fn schema_two_startup_migration_keeps_registered_images_and_original_bytes() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(product_service::get(&db, &product.id).unwrap(), product);
     assert_eq!(repository::list(&db, &product.id).unwrap(), images);
@@ -2184,6 +2189,7 @@ fn product_delete_commit_resolution_checks_product_all_ids_paths_and_unknown_sta
             &f.db,
             &f.product.id,
             &before,
+            &[],
             &[],
             Err(AppError::DatabaseOperation),
         )
@@ -2696,6 +2702,7 @@ fn product_delete_commit_unknown_checks_value_references_and_full_rollback() {
             &f.product.id,
             &images,
             &expected.expected_attribute_values,
+            &[],
             Err(AppError::DatabaseOperation),
         )
     };

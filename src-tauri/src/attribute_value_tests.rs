@@ -332,7 +332,7 @@ fn restart_preserves_decimal_text_and_schema_five() {
         assert_eq!(
             db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            5
+            6
         );
     }
     std::fs::remove_file(path).unwrap();

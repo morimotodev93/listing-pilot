@@ -3,6 +3,7 @@ pub mod attribute_group;
 pub mod attribute_value;
 pub mod batch_export;
 pub mod image;
+pub mod image_url;
 pub mod listing_preview;
 pub mod product;
 

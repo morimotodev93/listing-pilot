@@ -82,7 +82,7 @@ fn schema_v5_migrates_all_versions_preserving_every_column_and_foreign_key() {
         migrations::apply(&mut db).unwrap();
         assert_eq!(
             rows(&db, "PRAGMA user_version"),
-            vec![vec![Value::Integer(5)]]
+            vec![vec![Value::Integer(6)]]
         );
         for (table, original) in tables.iter().zip(before) {
             let after = rows(&db, &format!("SELECT * FROM {table} ORDER BY 1,2"));
@@ -119,11 +119,11 @@ fn schema_v5_migrates_all_versions_preserving_every_column_and_foreign_key() {
             schema
         );
         assert_eq!(rows(&db, "SELECT * FROM attribute_groups"), data);
-        db.pragma_update(None, "user_version", 6).unwrap();
+        db.pragma_update(None, "user_version", 7).unwrap();
         assert!(migrations::apply(&mut db).is_err());
         assert_eq!(
             rows(&db, "PRAGMA user_version"),
-            vec![vec![Value::Integer(6)]]
+            vec![vec![Value::Integer(7)]]
         );
         assert_eq!(
             rows(&db, "SELECT name,sql FROM sqlite_master ORDER BY name"),

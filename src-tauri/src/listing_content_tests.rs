@@ -77,7 +77,7 @@ fn all_old_versions_migrate_preserving_all_columns_and_related_rows() {
         migrations::apply(&mut db).unwrap();
         assert_eq!(
             rows(&db, "PRAGMA user_version"),
-            vec![vec![Value::Integer(5)]]
+            vec![vec![Value::Integer(6)]]
         );
         for (table, original) in tables.iter().zip(before) {
             let after = rows(&db, &format!("SELECT * FROM {table}"));
@@ -343,7 +343,7 @@ fn file_restart_and_future_schema_rejection_preserve_listing_content() {
         assert_eq!(products::get(&db, &p.id).unwrap(), p);
         assert_eq!(products::list(&db).unwrap(), vec![p.clone()]);
         assert_eq!(products::edit_snapshot(&db, &p.id).unwrap().product, p);
-        for version in [6, 99] {
+        for version in [7, 99] {
             db.pragma_update(None, "user_version", version).unwrap();
             assert!(migrations::apply(&mut db).is_err());
             assert_eq!(products::get(&db, &p.id).unwrap(), p);

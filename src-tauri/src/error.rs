@@ -3,6 +3,12 @@ use serde::Serialize;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum AppError {
+    InvalidShopifyStore,
+    InvalidShopifyImageUrl,
+    InvalidImageAltText,
+    InvalidImageUrlSelection,
+    DuplicateShopifyImageUrl,
+    ImageUrlSaveUnknown,
     ShopifyCsvSizeLimit,
     ShopifyExportBlocked,
     ShopifyCsvFormulaRisk { product_id: String, column: String },

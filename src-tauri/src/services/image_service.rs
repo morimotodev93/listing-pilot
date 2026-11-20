@@ -5,7 +5,10 @@ use crate::{
     },
     error::AppError,
     infrastructure::{
-        db::{Database, image_repository as repository, product_repository},
+        db::{
+            Database, image_repository as repository, image_url_repository as urls,
+            product_repository,
+        },
         media_storage::{MediaStorage, filename},
     },
 };
@@ -74,16 +77,25 @@ pub fn delete(
             return Err(AppError::ImageNotFound);
         }
     }
-    let image = database.with(|connection| repository::get(connection, product_id, image_id))?;
+    let (image, checked_urls) = database.with_mut(|connection| {
+        let tx = connection.transaction()?;
+        Ok((
+            repository::get(&tx, product_id, image_id)?,
+            urls::for_image(&tx, image_id)?,
+        ))
+    })?;
     media.deletion_file_exists(&image)?;
     let commit = database.with_mut(|connection| {
         let transaction =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let current = repository::get(&transaction, product_id, image_id)?;
-        if current != image {
+        if current != image || urls::for_image(&transaction, image_id)? != checked_urls {
             return Err(AppError::StaleData);
         }
         repository::delete(&transaction, product_id, image_id)?;
+        if urls::references_image(&transaction, image_id)? {
+            return Err(AppError::StaleData);
+        }
         let remaining = repository::list(&transaction, product_id)?;
         let ids = remaining
             .into_iter()
@@ -93,21 +105,28 @@ pub fn delete(
         // Keep statement/validation errors distinct from ambiguous COMMIT errors.
         Ok(transaction.commit().map_err(AppError::from))
     })?;
-    resolve_delete_commit(database, &image, commit)?;
+    resolve_delete_commit(database, &image, &checked_urls, commit)?;
     Ok(finish_delete(media, &image))
 }
 
 pub(crate) fn resolve_delete_commit(
     database: &Database,
     image: &ProductImage,
+    checked_urls: &[crate::domain::image_url::ImageUrlSetting],
     commit: Result<(), AppError>,
 ) -> Result<(), AppError> {
     if let Err(error) = commit {
-        match database.with(|connection| {
+        match database.with_mut(|connection| {
             if !connection.is_autocommit() {
                 return Err(AppError::ImageDeletionUnknown);
             }
-            repository::references_image_or_path(connection, image)
+            let tx = connection.transaction()?;
+            let references = repository::references_image_or_path(&tx, image)?;
+            let current_urls = urls::for_image(&tx, &image.id)?;
+            if current_urls != checked_urls && (references || !current_urls.is_empty()) {
+                return Err(AppError::ImageDeletionUnknown);
+            }
+            Ok(references || !current_urls.is_empty())
         }) {
             Ok(false) => (),
             Ok(true) => return Err(error),
