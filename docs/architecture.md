@@ -3,6 +3,31 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
+## Phase 5.2.2B Shopify画像URL管理専用UI
+
+`ProductDetail`内の`ProductImages`から`ShopifyImageUrls`パネルへ切り替える。商品名・SKUを引き継ぎ、通常の画像操作と商品編集・削除・一覧遷移は同時に表示しない。
+開くイベントでは既存imageBusy refを同期的にロックし、専用パネルの戻る処理で解除する。保存中はrefとdisabledを併用して二重送信・戻る・ストア変更を防ぐ。
+未保存の個別入力・貼り付け・画像対応確認があれば、戻る・ストア切替・再取得にdialogで破棄確認を求める。beforeunloadも未保存／保存中の通常の離脱を抑止する。
+
+`lib/api/shopifyImageUrls.ts`の2ラッパーは既存request<T>と`{ input }`を使用し、Phase 5.2.2AのRust DTOをcamelCaseのまま扱う。
+既存`listProductImages`はsnake_caseであり、ProductImage型に実レスポンスのsha256を補うだけでIPCは変えない。
+ストア読み込み時に2 APIを並列取得し、商品ID・UUID集合・配列順・sortOrder／sort_order・SHA・設定の所属を照合する。
+合わなければ保存を止め、どちらかへ自動補正しない。照合後はUUIDのMapでローカル画像とURL行を結合し、preview_urlだけをimgに使う。
+
+`shopifyImageUrlTypes.ts`がDTO型、`shopifyImageUrlEditor.ts`が文字数・バイト数・入力補助検証・スナップショット照合・貼り付け行分割を担当する。
+URLは入力文字列を維持し、URLパーサーの表現は重複の補助検査にだけ使う。altはArray.fromでUnicodeコードポイントを数え、不正サロゲート・制御文字・改行・数式を補助検証する。
+最終検証は既存Rustに委ねる。保存済みimageSha256が現在SHAと異なる行は、URLを空にするか、各行の対応確認を明示しない限り全画像保存を許可しない。
+
+入力中のストアと読み込み済みストアを分け、前者が異なる間は保存不可。履歴候補はパネル内のメモリのみで、DBのストア一覧取得や永続履歴は追加しない。
+取得ごとのgenerationとアンマウント時の失効で旧ストア・旧画面の応答を無視する。StrictModeのEffectには取得・保存を置かず、利用者の操作でのみ実行する。
+一括貼り付けは空行・末尾改行も保持し、全行検査→ストア・UUID・ローカルサムネイル付き対応表→確認→編集状態への全件適用の順。空行はURLとaltをともに空にする。
+適用時はIPCを呼ばず、最終保存で変更なし行も含む全画像と取得時トークンを送る。保存成功時だけ返却スナップショットを採用する。
+stale_data／invalid_image_url_selectionは競合、image_url_save_unknownや応答不明は結果不明として、編集内容を保持し再保存を停止する。
+最新状態の再取得は利用者が破棄確認した場合だけ行い、自動再送信やエラー時の自動上書きをしない。6つの新規エラーを既存request.tsの日本語表示へ追加する。
+
+Rust・Migration・依存・CSP・Capabilities・Asset Protocol・10列CSVは変更しない。13列CSVはPhase 5.2.2Cの対象。
+UIモックと実WebView2／Rust IPCの検証は区別し、[検証記録](verification.md)に手動受け入れチェックリストを残す。
+
 ## Phase 5.2.2A Shopify画像URL管理バックエンド
 
 `commands/image_url.rs` → `services/image_url_service.rs` → `infrastructure/db/image_url_repository.rs`。
@@ -25,7 +50,7 @@ URL解析前にもauthorityとエスケープを検査し、保存用表現の4,
 Migration 0006はSchema v5→v6の新しいimage_url_settingsのみを追加し、image_idの外部キーはON DELETE CASCADE。
 画像削除・商品削除は既存のpermit・原本検査・非置換隔離を維持し、事前／IMMEDIATE照合とCOMMIT失敗後の同一読取スナップショットにURL設定を含める。
 URL参照だけが残る状態や参照確認不能では隔離を進めない。product_images.product_idのON DELETE RESTRICTは変更しない。
-React専用UI・APIラッパー・画像付き13列CSVは未実装。既存の画像なし10列CSVと出力確定処理・CSP・Capabilitiesは変更しない。
+Phase 5.2.2A時点ではReact専用UI・APIラッパー・画像付き13列CSVは未実装。既存の画像なし10列CSVと出力確定処理・CSP・Capabilitiesは変更しない。
 Schema v6を通常LocalAppDataへ適用する実機検証は行わない。詳細は [ADR 0014](decisions/0014-shopify-image-url-mapping.md)。
 
 ## Phase 5.1 Shopify専用CSV

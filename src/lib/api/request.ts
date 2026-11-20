@@ -1,6 +1,12 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const messages: Record<string, string> = {
+  invalid_shopify_store: "対象ストアは単一ラベルの example-store.myshopify.com 形式で入力してください。URLやパスは使えません。",
+  invalid_shopify_image_url: "画像URLを確認してください。Shopify CDNの公開HTTPS URL、4,096 UTF-8バイト以内で入力し、ユーザー情報・制御文字・非標準ポートは使えません。",
+  invalid_image_alt_text: "altは任意・512 Unicode文字以内の単一行です。制御文字・数式になる先頭文字は使えません。URLを解除する場合はaltも空にしてください。",
+  invalid_image_url_selection: "対象画像の組み合わせを確認できません。最新の画像とURL設定を再読み込みしてください。",
+  duplicate_shopify_image_url: "同じストア・商品の複数画像に同じURLは設定できません。各画像との対応を確認してください。",
+  image_url_save_unknown: "URL設定の保存結果を確認できませんでした。自動再送信はしません。編集内容を控えたうえで、最新の設定を再読み込みして保存結果を確認してください。",
   shopify_csv_size_limit: "Shopify用CSVは15MB未満にしてください。対象商品を減らしてください。",
   shopify_export_blocked: "価格未設定などの問題があるためShopify用CSVを出力できません。修正後に再読み込みしてください。",
   shopify_csv_formula_risk: "CSVで数式として扱われる文字列があるためShopify用CSVを出力できません。",

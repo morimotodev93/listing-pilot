@@ -5,6 +5,7 @@ import type { DeleteProductReport, ProductDeletePreview } from "../../../lib/api
 import type { Product, ProductEditSnapshot } from "../types";
 import { ProductImages } from "./ProductImages";
 import { ListingPreview } from "./ListingPreview";
+import { ShopifyImageUrls } from "./ShopifyImageUrls";
 
 type Props = { product: Product; groups: AttributeGroup[]; onBack: () => void; onEdit: () => void; onDeleted: (report: DeleteProductReport) => void };
 const yen = new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY" });
@@ -12,6 +13,7 @@ const date = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: 
 
 export function ProductDetail({ product: initialProduct, groups, onBack, onEdit, onDeleted }: Props) {
   const [showListing, setShowListing] = useState(false);
+  const [showImageUrls, setShowImageUrls] = useState(false);
   const [snapshot, setSnapshot] = useState<ProductEditSnapshot | null>(null);
   const [valueError, setValueError] = useState("");
   const product = snapshot?.product ?? initialProduct;
@@ -60,6 +62,8 @@ export function ProductDetail({ product: initialProduct, groups, onBack, onEdit,
     } finally { operation.current = false; setBusy(false); setDeleting(false); }
   }
   if (showListing) return <ListingPreview productId={product.id} onBack={() => setShowListing(false)} onEdit={onEdit} />;
+  if (showImageUrls) return <ShopifyImageUrls productId={product.id} productName={product.name} sku={product.sku}
+    onBack={() => { imageBusy.current = false; setShowImageUrls(false); }} />;
   return <section className="panel" aria-labelledby="detail-heading">
     <div className="section-heading">
       <div><h2 id="detail-heading">{product.name}</h2><p className="muted">商品詳細</p></div>
@@ -100,6 +104,10 @@ export function ProductDetail({ product: initialProduct, groups, onBack, onEdit,
         <button type="button" disabled={busy || !preview} onClick={() => void confirmDelete()}>{deleting ? "削除中…" : "商品を削除"}</button></div>
     </dialog>
     <ProductImages key={product.id} productId={product.id} disabled={busy || preview !== null}
+      onConfigureShopifyUrls={() => {
+        if (operation.current || imageBusy.current || preview) return;
+        imageBusy.current = true; setShowImageUrls(true);
+      }}
       isBlocked={() => operation.current || preview !== null}
       onBusyChange={value => { imageBusy.current = value; setImporting(value); }} />
   </section>;

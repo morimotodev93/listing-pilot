@@ -91,12 +91,14 @@ function ImageCard({ image, index, count, busy, onMove, onDelete }: CardProps) {
 
 type Props = {
   productId: string;
+  onConfigureShopifyUrls: () => void;
   onBusyChange: (busy: boolean) => void;
   disabled?: boolean;
   isBlocked?: () => boolean;
 };
 export function ProductImages({
   productId,
+  onConfigureShopifyUrls,
   onBusyChange,
   disabled = false,
   isBlocked,
@@ -289,13 +291,18 @@ export function ProductImages({
             JPEG・PNG・WebP / 1枚20MiB・4,000万画素 / 1回20枚まで
           </p>
         </div>
-        <button
+        <div className="detail-actions"><button
           type="button"
           disabled={controlsBusy}
           onClick={() => void importImages()}
         >
           {importing ? "画像を選択・取り込み中…" : "画像を取り込む"}
         </button>
+        <button type="button" className="secondary" disabled={controlsBusy || !orderReady}
+          onClick={() => {
+            if (disabled || isBlocked?.() || operation.current || loading || !orderReady || deleteTarget) return;
+            onConfigureShopifyUrls();
+          }}>Shopify画像URLを設定</button></div>
       </div>
       <dialog
         ref={confirmDialog}

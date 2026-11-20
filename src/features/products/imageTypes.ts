@@ -7,6 +7,7 @@ export type ProductImage = {
   width: number;
   height: number;
   sort_order: number;
+  sha256: string;
   created_at: string;
   preview_url: string | null;
 };
