@@ -207,9 +207,8 @@ export function ShopifyImageUrls({ productId, productName, sku, onBack }: Props)
     <div className="section-heading">
       <div><h2 id="shopify-urls-heading" ref={heading} tabIndex={-1}>Shopify画像URLを設定</h2>
         <p className="shopify-url-product"><strong>{productName}</strong> / SKU：{sku}</p></div>
-      <button type="button" className="secondary" disabled={saving} onClick={() => requestAction({ kind: "back" })}>商品画像へ戻る</button>
     </div>
-    <p className="muted">Shopify Filesからコピーした公開画像URLを、ローカル画像ごとに設定します。URLの実在・画像内容・ストアの所有権は確認しません。画像付きCSV出力は後続機能です。</p>
+    <p className="muted">Shopify Filesからコピーした公開画像URLを、ローカル画像ごとに設定します。URLの実在・画像内容・ストアの所有権は確認しません。画像付きCSVは商品一覧から出力できます。</p>
     <fieldset disabled={saving} className="shopify-store-controls">
       <legend>対象ストア</legend>
       <label htmlFor="shopify-store-domain">ストアのドメイン</label>
@@ -220,8 +219,10 @@ export function ShopifyImageUrls({ productId, productName, sku, onBack }: Props)
       <button type="button" disabled={!storeDraft.trim()} onClick={() => requestAction({ kind: "load", store: storeDraft })}>このストアの設定を読み込む</button>
     </fieldset>
     {loading && <p role="status" className="shopify-url-text">{loadingStore} の画像と設定を読み込んでいます…</p>}
-    {error && <p role="alert" className="error">{error}</p>}
-    {notice && <p role="status" className="success shopify-url-text">{notice}</p>}
+    <div id="shopify-save-result" tabIndex={-1}>
+      {error && <p role="alert" className="error">{error}</p>}
+      {notice && <p role="status" className="success shopify-url-text">{notice}</p>}
+    </div>
     {loaded && <>
       <div className="shopify-url-context">
         <p className="shopify-url-text">現在の対象ストア：<strong>{loaded.snapshot.storeKey}</strong> / {rows.length}枚</p>
@@ -297,13 +298,18 @@ export function ShopifyImageUrls({ productId, productName, sku, onBack }: Props)
             </div>}
           </section>
         </fieldset>
-        <div className="shopify-url-save">
-          <p className="muted" id="shopify-save-reason">{saving ? "保存結果が返るまで、この画面でお待ちください。" : saveReason || "表示中ストアの全画像設定をまとめて保存します。"}</p>
-          <button type="button" disabled={saving || !!saveReason} aria-describedby="shopify-save-reason" onClick={() => void save()}>
-            {saving ? "保存中…" : "設定を保存"}</button>
-        </div>
       </>}
     </>}
+    <div className="page-action-bar">
+      <p className="muted" id="shopify-save-reason" role="status">{saving ? "保存結果が返るまで、この画面でお待ちください。" : saveReason || "表示中ストアの全画像設定をまとめて保存します。"}</p>
+      {dirty && <p className="muted">未保存の入力があります。</p>}
+      {(error || notice) && <a href="#shopify-save-result">{error ? "保存・読み込みエラーを確認" : "操作結果を確認"}</a>}
+      <div className="detail-actions">
+        <button type="button" className="secondary" disabled={saving} onClick={() => requestAction({ kind: "back" })}>商品画像へ戻る</button>
+        <button type="button" disabled={saving || !!saveReason} aria-describedby="shopify-save-reason" onClick={() => void save()}>
+          {saving ? "保存中…" : "設定を保存"}</button>
+      </div>
+    </div>
     <dialog ref={discardDialog} className="confirm-dialog" aria-labelledby="shopify-discard-heading"
       onCancel={event => { event.preventDefault(); cancelDiscard(); }}>
       <h3 id="shopify-discard-heading">未保存の入力を破棄しますか？</h3>

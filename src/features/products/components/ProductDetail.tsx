@@ -69,7 +69,6 @@ export function ProductDetail({ product: initialProduct, groups, onBack, onEdit,
       <div><h2 id="detail-heading">{product.name}</h2><p className="muted">商品詳細</p></div>
       <div className="detail-actions">
         <button type="button" className="secondary" disabled={locked} onClick={() => { if (!operation.current && !imageBusy.current && !preview) setShowListing(true); }}>出品プレビュー</button>
-        <button type="button" className="secondary" disabled={locked} onClick={() => { if (!operation.current && !imageBusy.current && !preview) onBack(); }}>一覧へ戻る</button>
         <button type="button" disabled={locked} onClick={() => { if (!operation.current && !imageBusy.current && !preview) onEdit(); }}>商品を編集</button>
         <button type="button" className="secondary" disabled={locked} onClick={() => void askDelete()}>商品を削除</button>
       </div>
@@ -110,5 +109,10 @@ export function ProductDetail({ product: initialProduct, groups, onBack, onEdit,
       }}
       isBlocked={() => operation.current || preview !== null}
       onBusyChange={value => { imageBusy.current = value; setImporting(value); }} />
+    <div className="page-action-bar">
+      <div className="detail-actions">
+        <button type="button" className="secondary" disabled={locked} onClick={() => { if (!operation.current && !imageBusy.current && !preview) onBack(); }}>一覧へ戻る</button>
+      </div>
+    </div>
   </section>;
 }

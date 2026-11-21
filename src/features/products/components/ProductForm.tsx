@@ -145,11 +145,13 @@ export function ProductForm({ product, onSaved, onCancel }: Props) {
           value={values[a.id] ?? ""} onChange={e => setValues(current => ({ ...current, [a.id]: e.target.value }))} />
         <small>{a.dataType === "number" ? "任意・整数15桁、小数6桁以内。負数も入力できます。" : "任意・2,000文字以内。改行は使えません。"}</small>
       </div>)}
-      {error && <p className="error" role="alert">{error}</p>}
     </fieldset>
-    <div className="actions">
-      <button type="submit" disabled={saving || !ready || conflicted || modalOpen || !selectedGroup}>{saving ? "保存中…" : "保存する"}</button>
-      <button type="button" className="secondary" disabled={saving || modalOpen} onClick={() => { if (!submitting.current) onCancel(); }}>キャンセル</button>
+    <div className="page-action-bar">
+      {error && <p className="error" role="alert">{error}</p>}
+      <div className="detail-actions">
+        <button type="submit" disabled={saving || !ready || conflicted || modalOpen || !selectedGroup}>{saving ? "保存中…" : "保存する"}</button>
+        <button type="button" className="secondary" disabled={saving || modalOpen} onClick={() => { if (!submitting.current) onCancel(); }}>キャンセル</button>
+      </div>
     </div></form>
     {switchTarget !== null && <ConfirmDialog title="グループを切り替えますか？" confirmLabel="未保存の入力を破棄して切り替え"
       onCancel={() => setSwitchTarget(null)} onConfirm={() => {

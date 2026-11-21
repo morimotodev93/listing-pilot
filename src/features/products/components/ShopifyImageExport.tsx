@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { exportShopifyProductsWithImages, getShopifyImageExportPreview, type ShopifyImagePreview } from "../../../lib/api/shopifyExport";
 import type { ExportReport } from "../../../lib/api/productExport";
 import { errorMessage } from "../../../lib/api/request";
 import { listProductImages } from "../../../lib/api/images";
 import type { ProductImage } from "../imageTypes";
 
-type Props = { productIds: string[]; onBack: () => void; onExportingChange: (value: boolean) => void };
+type Props = { productIds: string[]; onBack: () => void; onExportingChange: (value: boolean) => void; children?: ReactNode };
 const statusLabels = { ready: "出力可能", warning: "警告あり", blocked: "出力不可" };
 
 function ExportThumbnail({ image }: { image: ProductImage | undefined }) {
@@ -15,7 +15,7 @@ function ExportThumbnail({ image }: { image: ProductImage | undefined }) {
     : <div className="shopify-export-thumbnail image-placeholder" role="img" aria-label="ローカル画像を表示できません">サムネイルを表示できません</div>;
 }
 
-export function ShopifyImageExport({ productIds, onBack, onExportingChange }: Props) {
+export function ShopifyImageExport({ productIds, onBack, onExportingChange, children }: Props) {
   const [store, setStore] = useState("");
   const [preview, setPreview] = useState<ShopifyImagePreview | null>(null);
   const [thumbnails, setThumbnails] = useState<Map<string, Map<string, ProductImage>>>(new Map());
@@ -95,8 +95,9 @@ export function ShopifyImageExport({ productIds, onBack, onExportingChange }: Pr
   }
 
   return <section className="panel shopify-image-export" aria-labelledby="shopify-image-export-heading" aria-busy={loading || exporting}>
+    {children}
     <div className="section-heading"><h2 id="shopify-image-export-heading">Shopify画像付き13列CSVの確認</h2>
-      <button type="button" className="secondary" disabled={exporting} onClick={() => { if (!outputLock.current) { generation.current++; onBack(); } }}>商品一覧へ戻る</button></div>
+    </div>
     <p>対象：{productIds.length}商品。新規登録用・下書き（draft）・非公開（false）。インポート時は「一致するHandleを上書き」をオフにしてください。既存Handleとの衝突は検出できません。</p>
     <p>全管理画像のURLが必要です。1商品1〜250画像。原本をコピーせず、画像URLをCSVへ記録します。URLの実在・画像内容・ストア所有権は確認しません。</p>
     <p>価格はJPY整数です。ストア通貨は自動取得・変換しません。Shopify管理画面で対象ストアの通貨を確認してください。</p>
@@ -129,15 +130,26 @@ export function ShopifyImageExport({ productIds, onBack, onExportingChange }: Pr
         {p.imageIssues.length > 0 && <ul aria-label="画像付き出力の確認事項">{p.imageIssues.map((issue, index) => <li key={`${issue.code}-${issue.imageId}-${index}`} className="error">{issue.position ? `画像${issue.position}枚目：` : ""}{issue.message}</li>)}</ul>}
       </article>)}
       {preview.blocked && <p role="alert" className="error">出力不可の商品があります。全商品の画像URL・画像情報・価格などを修正するまで全件の出力を停止します。</p>}
-      <fieldset disabled={exporting}>
+      <fieldset disabled={exporting} id="shopify-export-confirmations" tabIndex={-1}>
         <legend className="sr-only">画像付きCSVの出力確認</legend>
         {preview.hasWarnings && <label><input type="checkbox" checked={warningToken === preview.snapshotToken} onChange={event => { if (!outputLock.current) setWarningToken(event.target.checked ? preview.snapshotToken : null); }} />全対象商品の内容と警告を確認し、この画像付きプレビューの出力を承認します</label>}
         <label><input type="checkbox" checked={currencyConfirmed} onChange={event => { if (!outputLock.current) setCurrencyConfirmed(event.target.checked); }} />対象ストアの通貨がJPYであることを確認した</label>
-        <button type="button" disabled={preview.blocked || !currencyConfirmed || (preview.hasWarnings && warningToken !== preview.snapshotToken)} onClick={() => void run()}>{exporting ? "画像付きCSVを出力中…" : "確認した商品を画像付きCSVで出力"}</button>
       </fieldset>
     </>}
     {report?.status === "cancelled" && <p role="status">出力先の選択をキャンセルしました。警告承認とJPY確認は解除しました。</p>}
     {report?.status === "success" && <p role="status" className="success shopify-url-text">画像付きCSVを出力しました。商品{report.product_count}件・画像URL{report.image_count}件。<br />CSV：{report.folder}/shopify-products.csv</p>}
     {report?.status === "failed" && <p role="alert" className="error">{errorMessage(report.error)} {report.cleanup_failed ? "一時フォルダーの清掃に失敗しました。" : "確定結果が不明なため保持しています。"} 確認場所：{report.retained_folder}</p>}
+    <div className="page-action-bar">
+      <p className="muted" id="shopify-export-reason" role="status">{exporting ? "出力先の選択・出力が終わるまでお待ちください。"
+        : loading ? "プレビューを読み込んでいます。"
+        : !preview ? "最新のプレビューを読み込んでください。"
+        : preview.blocked ? "出力不可の商品があります。本文の確認事項を修正してください。"
+        : [!currencyConfirmed && "JPY確認が必要です。", preview.hasWarnings && warningToken !== preview.snapshotToken && "警告の承認が必要です。"].filter(Boolean).join(" ") || "確認済みの内容を出力できます。"}</p>
+      {preview && !exporting && <a href="#shopify-export-confirmations">JPY・警告の確認欄へ</a>}
+      <div className="detail-actions">
+        <button type="button" className="secondary" disabled={exporting} onClick={() => { if (!outputLock.current) { generation.current++; onBack(); } }}>商品一覧へ戻る</button>
+        <button type="button" aria-describedby="shopify-export-reason" disabled={exporting || loading || !preview || preview.blocked || !currencyConfirmed || (preview.hasWarnings && warningToken !== preview.snapshotToken)} onClick={() => void run()}>{exporting ? "画像付きCSVを出力中…" : "確認した商品を画像付きCSVで出力"}</button>
+      </div>
+    </div>
   </section>;
 }

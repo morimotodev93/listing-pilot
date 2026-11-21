@@ -48,7 +48,6 @@ export function ListingPreview({ productId, onBack, onEdit }: { productId: strin
   return <section className="panel" aria-labelledby="listing-heading" aria-busy={loading || exporting}>
     <div className="section-heading"><h2 id="listing-heading">出品プレビュー</h2>
       <div className="detail-actions">
-        <button type="button" className="secondary" disabled={exporting} onClick={() => { if (!busy.current) onBack(); }}>商品詳細へ戻る</button>
         <button type="button" disabled={exporting} onClick={() => { if (!busy.current) onEdit(); }}>商品を編集</button>
         <button type="button" className="secondary" disabled={loading || exporting} onClick={refresh}>プレビューを再読み込み</button>
       </div>
@@ -60,12 +59,10 @@ export function ListingPreview({ productId, onBack, onEdit }: { productId: strin
         <li key={issue.code} className={issue.severity === "error" ? "error" : "warning"}>
           {issue.severity === "error" ? "エラー" : "警告"}：{issue.message}
         </li>)}</ul>}
-      {result.status === "warning" && <label><input type="checkbox" disabled={exporting}
+      {result.status === "warning" && <label id="listing-export-confirmation" tabIndex={-1}><input type="checkbox" disabled={exporting}
         checked={warningToken === result.snapshotToken}
         onChange={event => setWarningToken(event.target.checked ? result.snapshotToken : null)} />上記の警告と現在の出品候補を確認し、この内容で出力します</label>}
       {result.status === "blocked" && <p className="error">問題を修正し、再読み込みしてから出力してください。</p>}
-      <p><button type="button" disabled={exporting || result.status === "blocked" || (result.status === "warning" && warningToken !== result.snapshotToken)} onClick={() => void runExport()}>
-        {exporting ? "エクスポート中…" : "エクスポート"}</button></p>
       {exportError && <p className="error" role="alert">{exportError}</p>}
       {report?.status === "cancelled" && <p role="status">出力先の選択をキャンセルしました。</p>}
       {report?.status === "success" && <p role="status">エクスポートが完了しました。商品 {report.product_count}件・カスタム項目 {report.attribute_count}件・画像 {report.image_count}枚{report.has_warnings ? "（警告確認済み）" : ""}<br />出力先：{report.folder}</p>}
@@ -87,5 +84,14 @@ export function ListingPreview({ productId, onBack, onEdit }: { productId: strin
         {result.images.map((image, index) => <PreviewImage key={`${revision}:${image.imageId}`} image={image} main={index === 0} />)}
       </div>}
     </> : null}
+    <div className="page-action-bar">
+      {result?.status === "warning" && warningToken !== result.snapshotToken && <p className="muted">本文の警告を確認し、<a href="#listing-export-confirmation">出力を承認</a>してください。</p>}
+      {result?.status === "blocked" && <p className="muted">本文の問題を修正し、再読み込みしてください。</p>}
+      <div className="detail-actions">
+        <button type="button" className="secondary" disabled={exporting} onClick={() => { if (!busy.current) onBack(); }}>商品詳細へ戻る</button>
+        <button type="button" disabled={exporting || !result || result.status === "blocked" || (result.status === "warning" && warningToken !== result.snapshotToken)} onClick={() => void runExport()}>
+          {exporting ? "エクスポート中…" : "エクスポート"}</button>
+      </div>
+    </div>
   </section>;
 }

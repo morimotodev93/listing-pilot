@@ -95,9 +95,7 @@ button.product-link:hover:not(:disabled) { background: transparent; color: #132f
 .shopify-url-paste-preview { margin-top: 20px; }
 .shopify-url-paste-row { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 16px; padding-block: 12px; border-bottom: 1px solid #dce3ed; overflow-wrap: anywhere; }
 .shopify-url-paste-row .shopify-url-thumbnail { width: 100px; height: 90px; }
-.shopify-url-save { margin-top: 24px; padding-top: 20px; border-top: 1px solid #dce3ed; }
-.shopify-url-save button { margin-top: 12px; }
-.shopify-export-mode { padding: 20px 24px; }
+.shopify-export-mode { padding-bottom: 16px; margin-bottom: 24px; border-bottom: 1px solid #dce3ed; }
 .shopify-export-mode legend { font-weight: 700; }
 .shopify-export-mode label { display: inline-flex; align-items: center; gap: 8px; margin: 8px 24px 12px 0; }
 .shopify-export-mode input, .shopify-image-export input[type="checkbox"] { width: auto; }
@@ -110,4 +108,24 @@ button.product-link:hover:not(:disabled) { background: transparent; color: #132f
   .shopify-image-urls > .section-heading { align-items: flex-start; flex-direction: column; }
   .shopify-url-identity, .shopify-url-paste-row { grid-template-columns: minmax(0, 1fr); }
   .shopify-url-row { padding: 16px; }
+}
+
+/* The document scrolls; keep each bar within its own panel/form. */
+.page-action-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: 24px;
+  padding: 12px 0;
+  border-top: 1px solid #dce3ed;
+  background: white;
+  display: grid;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.page-action-bar > p { margin: 0; }
+.page-action-bar button { max-width: 100%; }
+html:has(.page-action-bar) { scroll-padding-bottom: 16rem; }
+@media (max-width: 600px) {
+  html:has(.page-action-bar) { scroll-padding-bottom: 24rem; }
 }
