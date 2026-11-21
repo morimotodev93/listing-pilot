@@ -1,5 +1,56 @@
 # 開発環境の検証結果
 
+## Phase 6.1 リリース前監査・Schema v5→v6移行（2026-11-21 日本時間）
+
+基準HEADは`c271589`、開始時の作業ツリーはクリーン。公開版v0.1.1／Schema v5と現行開発版Schema v6を監査した。
+詳細・証跡・試験名は[Phase 6.1監査記録](phase61-release-audit.md)、後続ゲートは[v0.2.0リリースチェックリスト](release-checklist-v020.md)を参照。
+バージョンは0.1.1のまま。Migration 0001〜0006、アプリ実装、依存・lockfile、identifier、CSP・権限は変更していない。
+
+公開v0.1.1記録対象コミット`01f0a1b`とMigration 0001〜0005のGit blob一致を確認し、そのSQLから完全新規のv5 DBを生成した。
+商品2件、画像1枚／4枚、公開文章、3グループ（非表示含む）、Text／Number等3定義・6値、PNG原本5枚と削除済み隔離PNG1枚を用意した。
+専用パスで本番のstartup_serviceを呼び、起動前5→移行後6、integrity_check=ok、foreign_key_check=0行、
+旧5テーブル全列・全行・旧スキーマ・UUID／画像順序・生成元とmedia全体のパス／サイズ／SHA-256保持、URL設定テーブル追加、再適用・サービス再起動を確認した。
+追加2件のRustテストは`src-tauri/src/phase61_tests.rs`。毎回新しい`.verification/phase61/<UUID>/`を作り証跡を保持する。
+
+DDL後半失敗・既存FK不整合・未来版7・media OSロック・破損DBの5ケースで起動を拒否し、
+故障注入後を基準にDBを含む全ファイルのパス・サイズ・SHA-256一致を確認した。DB再作成や画像整理は行われなかった。
+既存のMigration／初期化／2プロセスロック／参照再取得／非置換保護テストも今回全件成功した。
+
+正常終了済みv5のDBとmedia一式（8ファイル・102,928 bytes）を新規バックアップ先へコピーし、
+別の新規復元先へコピーして全manifest照合後、v5整合性→v6移行→サービス再起動・全旧データ／原本／隔離保持を確認した。
+バックアップ自体は開かず、終了時も元のmanifestと一致。SQLite関連ファイルは当該セットには存在せず、WAL等の復旧は未検証。
+バックアップ文書に現行版の手順を追記し、過去Phase履歴を保持した。v6→v0.1.1は保証せず、user_versionだけを5に戻すことは禁止。
+戻す場合は移行後セットを退避し、更新前v5のDB・関連ファイル・media全体の一組から復元する。
+
+最終ソース編集後の今回の実行結果：
+
+| コマンド | 終了コード・結果 |
+| --- | --- |
+| `npm run build` | 0。TypeScript両設定＋Vite、45 modules。初回は1（sandboxのspawn EPERM）、同じコード・依存のまま承認された通常権限で成功 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 0、警告0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` | 0。250 passed／0 failed／0 ignored（既存248＋新規2）、main／doc-tests各0 |
+| `cargo metadata --manifest-path src-tauri/Cargo.toml --locked --offline --format-version 1 --no-deps` | 0 |
+| `npm ls --depth=0` | 0 |
+| `git diff --check` | 最終文書・レビュー成果物作成後に0 |
+
+新規2テストの初回絞込実行は終了101（1成功・1失敗）。Windowsロック中の.lockをテスト補助処理が読みエラー33になったため、
+拒否観測後にテスト側ロックを解放してから全ファイルを照合するよう修正した。アプリ実装変更なし、最終全件実行で成功。
+初回PowerShellプロファイルもfnmの権限エラーを出したため以後は読み込まず、永続環境は変更していない。
+
+最終証跡は`.verification/phase61/`の`27068d91-44fd-41d6-9acb-afe4d79267de`（ログ・SQL由来照合）、
+`aab4f629-4a7e-4207-a965-4d8950a84084`（成功移行・復元）、`4c4a14f1-9015-4fc7-aeaa-b24cad0a804e`（失敗保護）。初回失敗の証跡も保全した。
+通常LocalDataは読み書きせず、既存DB・media・バックアップ・検証成果物は流用・変更・削除していない。
+GUI・通常tauri dev・Release EXE・インストーラーは起動せず、tauri buildも今回未実行。
+
+合成試験で重大な移行不具合は検出していない。**レビュー承認後にPhase 6.2のビルド準備へ進行可能、配布可否は未確定。**
+v0.1.1の過去NSIS実機成功はv0.2.0更新の成功ではない。実更新・最新Release CSP／Stickyバー・GUI復元・別PC／MSI・WebView2未導入／オフライン・残存WAL等は未検証。
+**Windows export_writeエラー5は未解決**。監視中リポジトリ内の最終非置換移動での過去記録を維持し、最新Release／10列／13列への影響は次工程へ残す。
+OS強制終了・電源断・実ディスク故障は再現していない。実データコピー試験には別途明示承認が必要。
+レビュー用`.review/phase61/phase61.patch`／`changed-files.txt`に検証DB・media・ログ・ビルド成果物は含めない。
+Commit・Push・タグ・Release公開は行わず、Phase 6.2へ進まずレビュー待ちとする。
+
 ## Phase 5.2.4 操作ボタンの常時表示（2026-11-21 日本時間）
 
 基準HEAD：`28b1cd9`。商品登録・編集、商品詳細、Shopify画像URL設定、Shopify CSV（10列／13列）、出品プレビューの操作を、各パネル／フォーム末尾の下部バーへ移動した。`products.css` の `position: sticky; bottom: 0; z-index: 1`、白背景・上境界線・折り返しボタンを使用し、通常フローの末尾余白と、対象画面表示時だけのdocumentの `scroll-padding-bottom` を確保した。グローバルなfixed配置は使用していない。

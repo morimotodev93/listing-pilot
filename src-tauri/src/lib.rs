@@ -20,6 +20,8 @@ mod listing_content_tests;
 #[cfg(test)]
 mod listing_preview_tests;
 #[cfg(test)]
+mod phase61_tests;
+#[cfg(test)]
 mod product_export_tests;
 #[cfg(test)]
 mod tests;
