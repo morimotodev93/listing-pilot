@@ -1,7 +1,8 @@
 # v0.2.0 — Phase 6.2以降のリリース判定チェックリスト
 
 2026-11-21作成。根拠は[Phase 6.1監査](phase61-release-audit.md)と[過去の検証記録](verification.md)。
-**Phase 6.2はユーザーによるPhase 6.1レビュー承認後に開始する。現時点でビルド・公開は未承認／未実施。**
+**Phase 6.1はユーザーレビュー承認・Commit・Push済み。Phase 6.2は候補生成・静的検査のみ承認され、通常アプリ起動・実インストール・一般公開は行わない。**
+Phase 6.2の結果・証跡は[候補ビルド記録](phase62-release-build.md)を参照。
 以下の未チェック項目は今回の成功結果に含めない。
 
 ## Phase 6.1で確認済み
@@ -15,12 +16,12 @@
 
 ## Phase 6.2 — 承認後のビルド準備・候補生成
 
-- [ ] ユーザーのレビュー承認を記録し、基準HEAD・作業ツリー・今回からの差分を確認する。
-- [ ] package.json、package-lock.json（ルート＋packagesの空文字キー）、Cargo.toml、Cargo.lock（自crate）、tauri.conf.jsonを0.2.0へ揃える。依存更新・Migration改変を混ぜない。
-- [ ] com.listingpilot.app、データ保存先、CSP／Asset Protocol／Capabilitiesを維持する。
-- [ ] 最終ソースに対しbuild／fmt／check／clippy／test／git diff --checkを実行し、終了コードと件数を記録する。
-- [ ] `npm run tauri build -- --bundles nsis`で新規候補を生成する。MSIを配布対象にするなら`--bundles msi`も生成する。
-- [ ] 各成果物の生成時刻、FileVersion／ProductVersion、x64、サイズ、SHA-256、Authenticode状態を記録し、旧成果物と区別する。
+- [x] ユーザーのレビュー承認を記録し、基準HEAD`cc58c3b`・main・開始時クリーンを確認した。
+- [x] package.json、package-lock.json（ルート＋packagesの空文字キー）、Cargo.toml、Cargo.lock（自crate）、tauri.conf.jsonを0.2.0へ統一。依存更新・Migration改変なし。
+- [x] com.listingpilot.app、データ保存先、CSP／Asset Protocol／Capabilitiesを維持。
+- [x] 最終ソースに対しnpm ci／build／fmt／check／clippy／test／git diff --checkを実行。最終250テスト成功、失敗0。環境上の初回失敗と再実行も記録。
+- [x] `npm run tauri build -- --bundles nsis`と`--bundles msi`で両候補を新規専用targetへ生成、終了0。導入は未実施。
+- [x] 成果物の生成時刻、FileVersion／ProductVersion、x64、サイズ、SHA-256、Authenticodeを記録。全件NotSigned。旧配布関連4ファイルのサイズ・ハッシュ不変も確認。
 - [ ] 署名なしで配布する場合の警告・実行制限と説明をレビューする。署名・Updater・CIの新設は別判断とする。
 
 ## 隔離Release／実更新の受け入れゲート

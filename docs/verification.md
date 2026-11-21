@@ -1,5 +1,33 @@
 # 開発環境の検証結果
 
+## Phase 6.2 v0.2.0 Release候補ビルド（2026-11-21 日本時間）
+
+基準HEAD：`cc58c3bafa63368d711c651e2726bbd62301ab92`、main、開始時クリーン。
+Phase 6.1のユーザーレビュー承認後、5ファイル・6か所の自アプリ版だけを0.2.0へ更新した。
+依存・Migration 0001〜0006・Schema v6・identifier・CSP・Asset Protocol・Capabilities・保存先は維持した。
+生成元の差分・197追跡ファイルのSHA-256、全実行ログは新規
+`.verification/phase62/70f0c0e5-6327-4108-83c3-6d499f8159ec/`に保管する。
+詳細は[Phase 6.2候補ビルド記録](phase62-release-build.md)と[判定チェックリスト](release-checklist-v020.md)を参照。
+
+`npm ci`はofflineでENOTCACHED（終了1）の後、専用キャッシュと承認されたネットワークで再実行し終了0。
+`npm run build`はsandbox内でspawn EPERM（終了1）の後、同じソースを通常権限で再実行し終了0、45 modules。
+fmt／check／clippy（-D warnings）は終了0。Cargoの依存取得はoffline、check／clippy／testは--locked。
+Rustテスト初回は終了101、249成功／1失敗。長い専用TEMP配下でジャンクション作成準備のassertが失敗した。
+同じ専用ディレクトリを指すWindows短縮パスへプロセス内TEMP／TMPを変更し、同じsandbox・同じソースで再実行した。
+最終結果は終了0、**250 passed／0 failed／0 ignored**、main／doc-tests各0件。テストコードの変更なし。
+既存Phase 6.1テストの今回新規4UUID出力（初回分を含む）はコピー後の248ファイルの全SHA-256一致も確認した。
+
+NSIS／MSI生成はともに終了0。新規NSISは2,791,795 bytes、MSIは3,915,776 bytes、最終Release EXEは7,895,040 bytes。
+版はすべて0.2.0、アプリ対象x64、全件NotSigned。MSI内部ProductVersion=0.2.0、SummaryTemplate=x64;0を読取専用COMで確認。
+絶対パス・作成／書込時刻・全SHA-256・NSIS終了時EXEの別保存は上記候補ビルド記録を参照。
+NSISはcurrentUser、MSIはperMachine（ALLUSERS=1）、WebView2はdownloadBootstrapperのまま。旧配布関連4ファイルのハッシュは不変。
+最終git diff --checkと、新規文書を含むレビューパッチのgit apply --reverse --checkは終了0。
+通常LocalDataは読取・書込・列挙・移動・削除していない。既存データや過去検証成果物は変更していない。
+通常Tauri dev・通常Release EXE・インストーラーは起動せず、実インストール・一般公開も行っていない。
+`export_write`エラー5は未解決。Release WebView2／本番CSP、実NSIS／MSI導入、v0.1.1からの更新、GUI復元、
+Runtime未導入／オフライン、別PC／VM、SmartScreen等の実表示、長期保全・電源断は未検証のまま引き継ぐ。
+Commit・Push・タグ・Release公開はせず、パッチレビュー後に隔離環境でのPhase 6.3へ進む判断を行う。
+
 ## Phase 6.1 リリース前監査・Schema v5→v6移行（2026-11-21 日本時間）
 
 基準HEADは`c271589`、開始時の作業ツリーはクリーン。公開版v0.1.1／Schema v5と現行開発版Schema v6を監査した。
