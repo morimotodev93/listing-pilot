@@ -18,6 +18,51 @@ use sha2::{Digest, Sha256};
 use std::{io::Write, path::Path};
 use uuid::Uuid;
 
+// Shared product projection only; each CSV profile owns its tokens and image policy.
+pub(crate) fn product_preview(
+    snapshot: &preview::Snapshot,
+) -> Result<(ShopifyProductPreview, String), AppError> {
+    let p = preview::build_for_csv(snapshot.clone());
+    let token = p.snapshot_token;
+    let issues: Vec<_> = p
+        .issues
+        .into_iter()
+        .filter_map(|mut issue| {
+            match issue.code {
+                IssueCode::ImagesMissing | IssueCode::ImageUnavailable => return None,
+                IssueCode::PriceMissing => {
+                    issue.severity = IssueSeverity::Error;
+                    issue.message = "価格が未設定のためShopify用CSVを出力できません。";
+                }
+                _ => (),
+            }
+            Some(issue)
+        })
+        .collect();
+    let errors = issues.iter().any(|i| i.severity == IssueSeverity::Error);
+    let warnings = issues.iter().any(|i| i.severity == IssueSeverity::Warning);
+    let product = ShopifyProductPreview {
+        handle: format!("lp-{}", p.product_id),
+        product_id: p.product_id,
+        name: snapshot.product.name.clone(),
+        vendor: snapshot.product.brand.clone(),
+        sku: p.sku,
+        title: p.title,
+        description: p.description,
+        price_yen: p.price_yen,
+        status: if errors {
+            ListingStatus::Blocked
+        } else if warnings {
+            ListingStatus::Warning
+        } else {
+            ListingStatus::Ready
+        },
+        issues,
+    };
+    shopify_csv::validate(&product)?;
+    Ok((product, token))
+}
+
 pub(crate) fn build(snapshots: &[preview::Snapshot]) -> Result<ShopifyPreview, AppError> {
     let mut hash = Sha256::new();
     hash.update(b"ListingPilot-shopify-csv-v1\0");
@@ -25,47 +70,14 @@ pub(crate) fn build(snapshots: &[preview::Snapshot]) -> Result<ShopifyPreview, A
     let mut has_warnings = false;
     let mut blocked = false;
     for snapshot in snapshots {
-        let p = preview::build_for_csv(snapshot.clone());
-        hash.update(p.product_id.as_bytes());
-        hash.update(p.snapshot_token.as_bytes());
-        let issues: Vec<_> = p
+        let (product, token) = product_preview(snapshot)?;
+        hash.update(product.product_id.as_bytes());
+        hash.update(token.as_bytes());
+        has_warnings |= product
             .issues
-            .into_iter()
-            .filter_map(|mut issue| {
-                match issue.code {
-                    IssueCode::ImagesMissing | IssueCode::ImageUnavailable => return None,
-                    IssueCode::PriceMissing => {
-                        issue.severity = IssueSeverity::Error;
-                        issue.message = "価格が未設定のためShopify用CSVを出力できません。";
-                    }
-                    _ => (),
-                }
-                Some(issue)
-            })
-            .collect();
-        let errors = issues.iter().any(|i| i.severity == IssueSeverity::Error);
-        let warnings = issues.iter().any(|i| i.severity == IssueSeverity::Warning);
-        has_warnings |= warnings;
-        blocked |= errors;
-        let product = ShopifyProductPreview {
-            handle: format!("lp-{}", p.product_id),
-            product_id: p.product_id,
-            name: snapshot.product.name.clone(),
-            vendor: snapshot.product.brand.clone(),
-            sku: p.sku,
-            title: p.title,
-            description: p.description,
-            price_yen: p.price_yen,
-            status: if errors {
-                ListingStatus::Blocked
-            } else if warnings {
-                ListingStatus::Warning
-            } else {
-                ListingStatus::Ready
-            },
-            issues,
-        };
-        shopify_csv::validate(&product)?;
+            .iter()
+            .any(|i| i.severity == IssueSeverity::Warning);
+        blocked |= product.status == ListingStatus::Blocked;
         products.push(product);
     }
     // Preview and execution use the exact same renderer, safety and byte limit checks.

@@ -2,10 +2,28 @@ import { useEffect, useRef, useState } from "react";
 import { exportShopifyProducts, getShopifyExportPreview, type ShopifyPreview } from "../../../lib/api/shopifyExport";
 import type { ExportReport } from "../../../lib/api/productExport";
 import { errorMessage } from "../../../lib/api/request";
+import { ShopifyImageExport } from "./ShopifyImageExport";
 
 const statusLabels = { ready: "出力可能", warning: "警告あり", blocked: "出力不可" };
 
 export function ShopifyExport({ productIds, onBack }: { productIds: string[]; onBack: () => void }) {
+  const [images, setImages] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const exportLock = useRef(false);
+  function onExportingChange(value: boolean) { exportLock.current = value; setExporting(value); }
+  return <>
+    <fieldset className="panel shopify-export-mode" disabled={exporting}>
+      <legend>Shopify CSVの出力方式</legend>
+      <label><input type="radio" name="shopify-mode" checked={!images} onChange={() => { if (!exportLock.current) setImages(false); }} />画像なし10列</label>
+      <label><input type="radio" name="shopify-mode" checked={images} onChange={() => { if (!exportLock.current) setImages(true); }} />画像付き13列</label>
+      <p className="muted">方式を切り替えるとプレビュー・警告承認・JPY確認は解除されます。</p>
+    </fieldset>
+    {images ? <ShopifyImageExport productIds={productIds} onBack={onBack} onExportingChange={onExportingChange} />
+      : <ShopifyPlainExport productIds={productIds} onBack={onBack} onExportingChange={onExportingChange} />}
+  </>;
+}
+
+function ShopifyPlainExport({ productIds, onBack, onExportingChange }: { productIds: string[]; onBack: () => void; onExportingChange: (value: boolean) => void }) {
   const [preview, setPreview] = useState<ShopifyPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -41,6 +59,7 @@ export function ShopifyExport({ productIds, onBack }: { productIds: string[]; on
   async function run() {
     if (busy.current || !preview || preview.blocked || !currencyConfirmed || (preview.hasWarnings && warningToken !== preview.snapshotToken)) return;
     busy.current = true; setExporting(true); setError(""); setReport(null);
+    onExportingChange(true);
     try {
       const result = await exportShopifyProducts(productIds, preview.snapshotToken, warningToken);
       if (mounted.current) {
@@ -54,7 +73,7 @@ export function ShopifyExport({ productIds, onBack }: { productIds: string[]; on
       }
     } finally {
       busy.current = false;
-      if (mounted.current) { setExporting(false); setWarningToken(null); setCurrencyConfirmed(false); }
+      if (mounted.current) { setExporting(false); setWarningToken(null); setCurrencyConfirmed(false); onExportingChange(false); }
     }
   }
   return <section className="panel" aria-labelledby="shopify-heading" aria-busy={loading || exporting}>

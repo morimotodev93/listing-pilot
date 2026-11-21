@@ -64,6 +64,8 @@ pub fn run() {
             commands::product_export::export_products,
             commands::product_export::get_shopify_export_preview,
             commands::product_export::export_shopify_products,
+            commands::product_export::get_shopify_image_export_preview,
+            commands::product_export::export_shopify_products_with_images,
             commands::listing_preview::get_listing_preview,
             commands::attribute::list_attribute_definitions,
             commands::attribute::create_attribute_definition,

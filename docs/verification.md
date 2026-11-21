@@ -1,5 +1,91 @@
 # 開発環境の検証結果
 
+## Phase 5.2.2C Shopify画像付き13列CSV（2026-11-20〜21 日本時間）
+
+基準HEADは`d8328ec`。開始時の作業ツリーはクリーン。画像付き専用のプレビュー・出力IPC、DTO、検証・CSV生成サービス、方式選択UIを実装した。
+既存10列は従来のIPC・トークン・CSV内容・ファイル名・確定処理を維持し、商品候補を作る小さな関数と引用符処理などだけを共有する。
+Schema v6、Migration 0001〜0006、依存／ロック、CSP・Capabilities・Asset Protocol、既存Workspace・汎用出力は変更していない。
+
+最終ソースの検証結果（11月21日の継続作業では文書とレビュー成果物を仕上げ、チェックを再確認）：
+
+| コマンド | 終了コード・結果 |
+| --- | --- |
+| `npm run build` | 0。TypeScript検査・Vite本番ビルド成功 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 0 |
+| `cargo check --manifest-path src-tauri/Cargo.toml` | 0 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 0 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 0。既存221件＋新規27件＝248件成功、失敗0・無視0。main／doc testsは各0件 |
+| `git diff --check` | 0。空白エラーなし |
+
+Rustの追加27件は専用の一時SQLite・media・出力領域で実行した。13列用の画像は主に登録メタデータだけの架空画像で、原本が存在しなくても画像を読み取り・コピーせずCSVを生成することを確認した。
+
+- 13列の正確な見出し、1／4画像、複数商品、先頭行と追加行の空欄位置、Handle反復、位置1始まり、商品UUID順、画像順とUUIDタイブレークを確認。
+- 公開説明文の改行・カンマ・引用符、alt空欄・日本語・引用符・125／512スカラー値・補助平面／結合文字、BOMなしUTF-8・LFを確認。
+- 15,000,000バイト未満の実レンダリング境界、URLの4,096／4,097バイト、保存値の再検証（不正URL・制御文字・数式・SHA不一致／不正）を確認。
+- 画像0枚、URL未設定・他ストアのみ、商品内重複と正規化後の重複、他商品・他ストアとの分離、価格0／NULL、250／251画像、20／21商品、1商品blockedでの全件停止を確認。
+- 商品編集、画像追加・削除・順序、URL・alt・設定解除・保存SHA・更新日時・選択商品集合・ストア変更でのトークン失効、10列／URL設定保存用トークンの流用拒否、警告承認の失効を確認。
+- WALの別接続から商品とURLを同時更新しても、商品読取とURL読取が異なる時点へ混ざらないことを確認。
+- ステージング後に別接続でURLを更新し、Mutexが解放されていることと確定前照合での拒否を確認。商品・alt・画像順・設定有無も最終照合の対象であることを確認。
+- 既存完成出力の保持、非置換衝突、清掃失敗時の未知ファイル保持、移動結果不明時のCSV保持、アプリ保存領域への出力拒否を確認。
+- 10列CSVの期待バイト列と従来のトークン構築を独立に比較し、画像URL設定を削除しても10列の内容・トークンを変えず出力できることを確認。既存の汎用単品・一括テストも全件成功。
+- プレビューJSONにURL・altの原文、管理原本パス、危険な画像IDを含めず、商品UUID・安全な画像UUID・位置・理由を返すことを確認。
+
+画像上限は[Shopify公式CSV資料](https://help.shopify.com/en/manual/products/import-export/using-csv#adding-multiple-product-images-in-a-csv-file)の1商品最大250画像と照合した。
+251枚以上はプレビューのimage_limitと実行時のshopify_product_image_limitで拒否する。原本バイト数や汎用200画像／1GiB上限は使用しない。
+
+TypeScriptの既存テスト基盤はないため依存・基盤は追加せず、`.verification/phase522c-ui-20261120-8d46/`に新規の一時HTML・メモリ内IPCモック・Node/CDPスクリプトを作成した。
+Viteのみを`127.0.0.1:1437`で起動し、新規の一時user-data-dirを指定したheadless Chromeで実コンポーネントをStrictMode下で確認した。
+`node .verification/phase522c-ui-20261120-8d46/run.mjs`は終了コード0、12シナリオ成功、未処理例外0・外部HTTPリクエスト0。
+これはReact／APIラッパーのUI確認であり、実WebView2・Rust IPC・SQLiteへ接続した試験ではない。結果JSONと800px画面は同領域に保持し、レビュー用パッチへ含めない。
+
+| UIモックで確認した項目 | 結果 |
+| --- | --- |
+| 10列の初期選択、ストア入力不要、既存IPCの利用 | 成功 |
+| 13列でストア未入力なら取得／出力しない、登録枚数・不足・メイン・画像順・alt状態・blocked表示 | 成功 |
+| JPY確認と警告承認の独立した制御、画像付き専用トークン・正規化ストアの送信、成功時件数／CSV場所表示 | 成功 |
+| 方式・ストア変更でプレビュー／警告承認／JPY確認を失効、旧方式・旧ストアの遅延応答を破棄 | 成功 |
+| 出力中の二重送信・方式／ストア切替・戻るを停止 | 成功 |
+| キャンセル・stale_data・結果不明後の承認解除、エラー後に明示的な再読込を要求し自動再送信しない | 成功 |
+| 不正ストアの日本語エラー、800px／600pxで横はみ出しなし | 成功 |
+
+ReactのHooks・非同期結果の失効・入力ラベル・disabled／同期ref・status／alertについて既読のreact-best-practicesスキルの項目で確認した。
+途中の検証ではサンドボックス内Viteがspawn EPERMで終了コード1となり、コード・依存を変えず承認された通常権限で再実行して成功した。
+初回Rustテストは241件中238成功・3失敗（終了コード1）。テスト用の非正規URLをSQL制約の下で投入したこと、追加画像のSHA重複、警告なしデータへ警告承認エラーを期待したことが原因で、テスト準備を修正した。
+境界テスト追加後の最終状態は上表の248件全件成功である。
+
+### Phase 5.2.2Cレビュー修正：出力前のローカルサムネイル（2026-11-21 日本時間）
+
+既存の未コミット変更を保持し、`ShopifyImageExport.tsx`と`products.css`へ表示を追加した。既存`listProductImages(productId)`の結果を商品ID・画像UUIDで照合し、CSV側の位置・メイン画像・URL／alt設定状態と併記する。配列インデックスで結合せず、`loading="lazy"`と`decoding="async"`を使用する。
+取得失敗・preview_url欠落・画像読込失敗はプレースホルダーにし、CSVのblocked判定・出力可否は変更しない。CDN URLをimg要素に渡さず、URL設定・原本の更新APIも呼ばない。Rust・Migration・10列CSV・セキュリティ設定・依存はこの修正では変更していない。
+
+新規の隔離領域`.verification/phase522c-thumbnails-20261121/`で、実コンポーネントとメモリ内IPCモックをheadless Chromeから確認した。
+`node .verification/phase522c-thumbnails-20261121/run.mjs`は終了コード0、17シナリオ成功、未処理例外0・外部HTTPリクエスト0。既存12項目に加え、画像APIの逆順応答でもUUIDが一致すること、CSV順変更・メイン表示、欠落／取得失敗／描画失敗でも出力可能なこと、旧ストア・旧方式・旧商品選択の遅延応答を破棄することを確認した。
+最終ソースで上表の6コマンドを再実行し、すべて終了コード0。Rustは248件成功、失敗0・無視0で維持した。UI試験用Viteの再起動は既存試験サーバーのポート使用中で一度終了コード1となり、起動済みの同サーバーを利用して試験を完了した。
+実WebView2でのAsset Protocolによるローカル画像表示、実際の大量画像での性能は未検証。通常LocalAppData・既存SQLite・管理原本は使用せず、実Tauriアプリも起動していない。UIモック成果物はレビュー用パッチに含めない。
+
+### 最終レビュー修正：サムネイル取得の待機分離（2026-11-21 日本時間）
+
+`ShopifyImageExport.tsx`のCSVプレビュー取得とサムネイル取得の待機を分離した。loadingはCSV取得だけで解除し、画像一覧は商品ごとに独立取得して商品ID・画像UUIDで追加反映する。未完了・失敗ではプレースホルダーを維持し、CSV確認・出力を妨げない。世代番号・マウント状態による旧応答の拒否を維持した。Rust・Migration・依存・セキュリティ設定・10列CSVはこの修正では変更していない。
+
+既存検証成果物を保持し、`.verification/phase522c-independent-thumbnails-20261121/`に新しい隔離UIモックを作成した。
+`node .verification/phase522c-independent-thumbnails-20261121/run.mjs`は終了コード0、19シナリオ成功、未処理例外0・外部HTTPリクエスト0。従来17項目に加え、サムネイル応答を未解決のままCSVプレビュー表示・承認・出力成功まで進めること、現在の遅延応答はUUIDで正しく反映され承認を維持することを確認した。商品・ストア・方式変更後の旧応答破棄、取得失敗時のプレースホルダー、10列への影響なしも再確認した。
+最終ソースで`npm run build`、`cargo fmt --manifest-path src-tauri/Cargo.toml --check`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`、`cargo test --manifest-path src-tauri/Cargo.toml`、`git diff --check`を実行し、すべて終了コード0。Rustは248件成功・失敗0・無視0。
+実WebView2・大量画像性能は引き続き未検証。通常LocalAppData・実データ・管理原本は使わず、Tauriアプリは起動していない。全変更のレビュー用パッチ・変更一覧を更新し、UI検証成果物は含めない。
+
+### Phase 5.2.3の手動受け入れチェックリスト（今回未実施）
+
+通常LocalAppDataを共有しない専用ユーザー／VM／保存先を明確に隔離した専用ビルドで実施する。今回、通常のnpm run tauri devや実アプリは起動しておらず、既存SQLite・管理原本は使用していない。
+
+- [ ] 実WebView2→Rust→隔離SQLiteで、10列／13列の方式切替とストア別のURL設定状態・blocked表示を確認する。
+- [ ] JPY確認・警告承認・ネイティブ出力先選択のキャンセル、出力中の二重操作／方式切替／離脱を実操作する。
+- [ ] 画像1枚／4枚／複数商品の13列CSVを実アプリで出力し、列・行・位置・alt・文字コードと原本非コピーを確認する。
+- [ ] 同じ隔離環境でURL・alt・画像構成変更後の競合、清掃失敗・結果不明時の通知と承認失効を確認する。
+- [ ] Shopify Dev Storeで既存Handle上書きオフの新規商品としてインポートし、画像順・メイン・altを再エクスポートで比較する。
+- [ ] 配布版・別PC・実電源断、OSウィンドウ終了／beforeunloadの挙動を確認する。状態を構成した単体試験を実電源断試験としない。
+
+URL形式の妥当性はCDN上の実在・画像内容の一致・ストア所有権・インポート成功を保証しない。Shopify API・HEAD確認・自動アップロードは追加していない。
+レビュー成果物は`.review/phase522c/`の全差分・変更一覧・READMEのみとし、DB・media・秘密・ビルド出力・UI検証成果物を含めない。Commit・Push・ブランチ・タグ・Release操作は行わない。
+
 ## Phase 5.2.2B Shopify画像URL管理専用UI（2026-11-20 日本時間）
 
 基準HEADは`0f6f637`、開始時の作業ツリーはクリーン。専用Reactパネル、APIラッパー、エラー表示、入力補助検証と必要なCSSを実装した。

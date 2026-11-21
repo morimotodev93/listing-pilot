@@ -13,3 +13,5 @@ pub(crate) mod export_csv;
 pub mod product_export_service;
 pub(crate) mod shopify_csv;
 pub mod shopify_export_service;
+pub(crate) mod shopify_image_csv;
+pub mod shopify_image_export_service;

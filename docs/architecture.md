@@ -3,6 +3,35 @@
 モジュラーモノリスを採用します。フロントエンドはFeature単位、Rustは単一crate内の
 モジュールで整理し、接続確認、SQLiteによる商品管理、商品画像の取り込み・表示を実装しています。
 
+## Phase 5.2.2C Shopify画像付き13列CSV
+
+`ShopifyExport`は方式選択と出力中ロックを持ち、従来の10列画面と`ShopifyImageExport`を別コンポーネントとして切り替える。
+切替で子をアンマウントし、古いプレビュー・承認・JPY確認を混用しない。画像付き画面はストア未入力では取得せず、入力変更時にプレビューと承認を即失効させる。
+世代番号／アンマウント確認で旧応答を破棄し、同期refと親コールバックで出力中の二重送信・方式／ストア切替・戻るを停止する。
+URL設定の編集は商品詳細の既存専用画面を案内し、新しい遷移状態は追加しない。プレビューにはURL・altの原文や原本パスを送らず、画像UUID・位置・設定状態・修正理由を表示する。
+ローカルサムネイルは既存の`listProductImages(productId)`を別途読み取り、商品IDと画像UUIDで照合する。CSV側の画像順に遅延読み込みで表示し、取得・描画失敗はプレースホルダーにする。画像一覧の旧応答も同じ世代番号で破棄し、サムネイルの成否をCSV出力可否へ反映しない。CDN URLをimg要素へ渡さない。
+CSVプレビューの待機はサムネイル取得から独立させる。プレビュー取得でloadingを解除し、サムネイル未完了でも確認・出力を可能にする。サムネイルは商品ごとに完了した分から反映し、失敗をCSV取得エラーへ変換しない。
+
+新IPCは`get_shopify_image_export_preview({input:{productIds,storeKey}})`と
+`export_shopify_products_with_images({input:{productIds,storeKey,snapshotToken,warningToken}})`。
+Commandsは共通media permitを取得しblocking workerへ委譲する。サービスは`shopify_image_export_service`、専用DTOは`domain/shopify_image_export`、レンダラーは`shopify_image_csv`。
+従来の2 IPCは画像なし専用のまま。共有はUUID集合正規化、商品候補を作る小さなproduct_preview、CSV引用符処理・バイト長検査、Workspaceだけにとどめる。
+画像なしのトークンのバイト構築・CSV列／値／出力先と確定処理は維持する。
+
+画像付きの読取は単一SQLite読取トランザクション内で全商品のlisting Snapshotと、選択ストア・platform=shopifyの全URL対応を取得する。
+保存値でもURL解析・4,096バイト・商品内重複・UUID所属・SHA一致／形式・altの512スカラー値と制御文字／数式を再検証する。
+1商品1〜250画像、1〜20商品。汎用200画像・1GiB上限は使用せず、原本の存在検査・読み取り・コピーも行わない。
+画像不足や不正は商品UUID・画像位置付きのblocked理由、251枚以上は専用shopify_product_image_limit、価格NULLは既存ShopifyExportBlockedとして扱う。
+
+専用トークンは`ListingPilot-shopify-image-csv-v1\0`と13列方式・正規化ストア・商品集合／既存候補トークン・画像UUID／順序／現在SHA・設定有無／URL／alt／保存SHA／更新日時を長さ付きでSHA-256へ入力する。
+10列とURL設定保存用トークンの双方から分離し、警告承認も現在トークンに結び付ける。
+プレビューと実行は同じ検証・13列レンダラーを使う。先頭画像行に商品10列、続く行にはHandleのみを繰り返し、画像URL・位置・altを各行へ追加する。
+
+ネイティブ出力先選択前後で再検証し、Mutex解放下で固定CSVをstagingへ書いてsync_allする。
+短いIMMEDIATE内で同じ読取方法により商品・画像・選択ストアの全設定を再取得し、Snapshot全体と宛先を照合してWorkspace.finishを1回だけ呼ぶ。
+完成先は`ListingPilot_ShopifyImages_{日付}_{UUID}`。確定後COMMITなし。通常失敗時は今回作成分のみ清掃し、不明・清掃失敗では保持する。Workspace・既存汎用出力は変更しない。
+Schema v6・Migration・依存・CSP・Capabilitiesは維持する。実WebView2／Shopify受け入れは[検証記録](verification.md)のPhase 5.2.3チェックリストへ分ける。
+
 ## Phase 5.2.2B Shopify画像URL管理専用UI
 
 `ProductDetail`内の`ProductImages`から`ShopifyImageUrls`パネルへ切り替える。商品名・SKUを引き継ぎ、通常の画像操作と商品編集・削除・一覧遷移は同時に表示しない。

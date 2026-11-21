@@ -1,6 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const messages: Record<string, string> = {
+  shopify_product_image_limit: "画像付きShopify CSVは1商品250画像までです。対象商品の画像枚数を確認してください。",
+  shopify_image_export_blocked: "画像付きShopify CSVを出力できません。対象ストアの全管理画像のURL・altと画像情報を確認してください。",
   invalid_shopify_store: "対象ストアは単一ラベルの example-store.myshopify.com 形式で入力してください。URLやパスは使えません。",
   invalid_shopify_image_url: "画像URLを確認してください。Shopify CDNの公開HTTPS URL、4,096 UTF-8バイト以内で入力し、ユーザー情報・制御文字・非標準ポートは使えません。",
   invalid_image_alt_text: "altは任意・512 Unicode文字以内の単一行です。制御文字・数式になる先頭文字は使えません。URLを解除する場合はaltも空にしてください。",
@@ -60,6 +62,12 @@ const messages: Record<string, string> = {
 
 export function errorMessage(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+  if ((code === "shopify_image_export_blocked" || code === "shopify_product_image_limit") && typeof error === "object" && error !== null && "product_id" in error) {
+    const reasons: Record<string, string> = { images_missing: "画像0枚", image_limit: "250枚超過", invalid_image: "画像情報不正", url_missing: "URL未設定", invalid_url: "URL不正", duplicate_url: "URL重複", sha_mismatch: "設定時と現在の画像情報が不一致", invalid_alt: "alt不正" };
+    const position = "position" in error && typeof error.position === "number" ? `、画像${error.position}枚目` : "";
+    const reason = "reason" in error ? reasons[String(error.reason)] : "";
+    return `${messages[code]} 対象商品UUID：${String(error.product_id)}${position}${reason ? `（${reason}）` : ""}。`;
+  }
   const columns: Record<string, string> = { "product.sku": "SKU", "product.title": "出品候補タイトル", "product.description": "公開用説明文", "attributes.name": "カスタム項目名", "attributes.value": "カスタム値", "attributes.unit": "単位" };
   if ((code === "batch_csv_formula_risk" || code === "shopify_csv_formula_risk") && typeof error === "object" && error !== null && "product_id" in error && "column" in error) {
     const shopifyColumns: Record<string, string> = { Title: "出品タイトル", Description: "公開説明文", Vendor: "Vendor（ブランド）", SKU: "SKU" };

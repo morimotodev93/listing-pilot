@@ -3,6 +3,15 @@ use serde::Serialize;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum AppError {
+    ShopifyProductImageLimit {
+        product_id: String,
+    },
+    ShopifyImageExportBlocked {
+        product_id: String,
+        image_id: Option<String>,
+        position: Option<usize>,
+        reason: crate::domain::shopify_image_export::ImageExportIssueCode,
+    },
     InvalidShopifyStore,
     InvalidShopifyImageUrl,
     InvalidImageAltText,
@@ -11,15 +20,23 @@ pub enum AppError {
     ImageUrlSaveUnknown,
     ShopifyCsvSizeLimit,
     ShopifyExportBlocked,
-    ShopifyCsvFormulaRisk { product_id: String, column: String },
+    ShopifyCsvFormulaRisk {
+        product_id: String,
+        column: String,
+    },
     InvalidExportSelection,
     ExportProductLimit,
     ExportImageLimit,
     ExportSizeLimit,
     ExportBlocked,
     ExportWarningRequired,
-    CsvFormulaRisk { column: String },
-    BatchCsvFormulaRisk { product_id: String, column: String },
+    CsvFormulaRisk {
+        column: String,
+    },
+    BatchCsvFormulaRisk {
+        product_id: String,
+        column: String,
+    },
     ExportImageInvalid,
     ExportDestination,
     ExportCollision,

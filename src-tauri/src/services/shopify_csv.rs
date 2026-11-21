@@ -23,7 +23,7 @@ pub(crate) fn check_size(bytes: usize) -> Result<(), AppError> {
     }
 }
 
-fn row(output: &mut String, cells: &[&str]) {
+pub(crate) fn row(output: &mut String, cells: &[&str]) {
     for (index, cell) in cells.iter().enumerate() {
         if index != 0 {
             output.push(',');

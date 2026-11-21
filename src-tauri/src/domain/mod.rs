@@ -9,3 +9,4 @@ pub mod product;
 
 pub mod product_export;
 pub mod shopify_export;
+pub mod shopify_image_export;

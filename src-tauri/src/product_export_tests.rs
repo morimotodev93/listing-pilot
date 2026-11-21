@@ -26,6 +26,8 @@ use uuid::Uuid;
 mod batch;
 #[path = "shopify_export_tests.rs"]
 mod shopify;
+#[path = "shopify_image_export_tests.rs"]
+mod shopify_images;
 
 struct Fixture {
     media: MediaStorage,
